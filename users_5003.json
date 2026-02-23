@@ -1,0 +1,27 @@
+[
+  {
+    "alias": "User1",
+    "pubkey": "a51fb652d925dffcfc4996ced96cf49f0d3081b46269f6fa8ee91b0f00382b9f",
+    "private_key_hex": "07eed57a4cb0ab8c3559fdfe2c350614376320ccd143664ede70acb4fb6a08a2"
+  },
+  {
+    "alias": "User2",
+    "pubkey": "0c7686bee9458b841ad1e92987f497250e3e93be2f2a4a498c6c0652d5d08d7f",
+    "private_key_hex": "4c9fdeb5b918914ab5de69bc2831d38ed6caa132389bbaae1b368b0222bb5a19"
+  },
+  {
+    "alias": "User3",
+    "pubkey": "f7c8e31d0bab830f0e7a8695aa3930eedaab504b723cdcdd83d67381571bc8b1",
+    "private_key_hex": "851b627c194419fc1f4f611d2f736a8a868cd396f7dc36ed1d01d938b78724c2"
+  },
+  {
+    "alias": "User4",
+    "pubkey": "5e6b8467b31be24324662866c2c34175c6230eb69ef0d0c6edcd7a6b0800f78d",
+    "private_key_hex": "8543b155e0d7567539da6528d477c560895fad21ae3b86fb96f4b14206825310"
+  },
+  {
+    "alias": "User5",
+    "pubkey": "85c54ff88a8c6254698754a2d1d5dad022dae4e6582cc2f557496e0fd402c195",
+    "private_key_hex": "d65057615e670a35f9217aa8594ef45912b906788585508af5f42e9a528355f0"
+  }
+]
