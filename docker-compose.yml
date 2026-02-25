@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  oracle:
+    build:
+      context: ./oracle
+      dockerfile: Dockerfile
+    container_name: futures_oracle
+    ports:
+      - "8080:8080"
+    environment:
+      # Set MOCK_MODE=true for local testing without real API calls
+      MOCK_MODE: "false"
+      # MOCK_SEED: "42"          # Uncomment for deterministic mock prices
+      CACHE_MAX_AGE: "30"       # Seconds before a cached price is re-fetched
+      PORT: "8080"
+      DB_PATH: "/data/oracle.db"
+      KEY_PATH: "/data/oracle_privkey.hex"
+    volumes:
+      # Persist the private key and price database across container restarts.
+      # IMPORTANT: back up oracle_privkey.hex — losing it means nodes can no
+      # longer verify signatures from this oracle instance.
+      - oracle_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  oracle_data:
+    driver: local
