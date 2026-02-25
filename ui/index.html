@@ -1,0 +1,669 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Derivatives Mini-Chain Dashboard</title>
+  <style>
+    :root{
+      --bg:#0b1020; --panel:#0f1730; --panel2:#121b3a; --text:#e9eeff; --muted:#9fb0ff;
+      --good:#35d07f; --warn:#ffcc66; --bad:#ff5c7a; --line:rgba(255,255,255,.09);
+      --chip:rgba(255,255,255,.08);
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius:18px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font-family:var(--sans); background: radial-gradient(1200px 800px at 10% 10%, #15235a 0, transparent 60%),
+                                       radial-gradient(1200px 800px at 80% 30%, #2a1a5a 0, transparent 55%),
+                                       var(--bg);
+         color:var(--text);}
+    a{color:inherit}
+    .wrap{max-width:1200px; margin:0 auto; padding:22px;}
+    .topbar{display:flex; gap:14px; align-items:center; justify-content:space-between; margin-bottom:18px;}
+    .title{display:flex; flex-direction:column; gap:2px;}
+    .title h1{margin:0; font-size:20px; letter-spacing:.4px}
+    .title .sub{color:var(--muted); font-size:12px}
+    .row{display:flex; gap:14px; flex-wrap:wrap;}
+    .card{background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+          border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px;}
+    .card h2{margin:0 0 10px 0; font-size:13px; color:var(--muted); font-weight:600; letter-spacing:.5px; text-transform:uppercase;}
+    .kpis{display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:12px; width:100%;}
+    .kpi{padding:12px; border-radius:14px; border:1px solid var(--line); background:rgba(0,0,0,.18);}
+    .kpi .label{font-size:11px; color:var(--muted)}
+    .kpi .val{font-size:18px; font-weight:700; margin-top:4px; font-family:var(--mono)}
+    .chip{display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--line);
+          background:var(--chip); border-radius:999px; font-size:12px;}
+    .dot{width:8px; height:8px; border-radius:999px; background:var(--muted); box-shadow:0 0 0 3px rgba(255,255,255,.06) inset;}
+    .dot.good{background:var(--good)} .dot.bad{background:var(--bad)} .dot.warn{background:var(--warn)}
+    select, input, button{font: inherit;}
+    select, input{
+      background:rgba(0,0,0,.25); color:var(--text); border:1px solid var(--line); border-radius:12px;
+      padding:10px 12px; outline:none; width:100%;
+    }
+    button{
+      cursor:pointer; border:1px solid var(--line); background: rgba(255,255,255,.10);
+      color:var(--text); padding:10px 12px; border-radius:12px;
+    }
+    button:hover{background: rgba(255,255,255,.14);}
+    button.primary{background: linear-gradient(90deg, rgba(53,208,127,.25), rgba(159,176,255,.18)); border-color: rgba(53,208,127,.35);}
+    button.danger{background: rgba(255,92,122,.15); border-color: rgba(255,92,122,.35);}
+    .tabs{display:flex; gap:8px; flex-wrap:wrap;}
+    .tab{padding:8px 12px; border-radius:999px; border:1px solid var(--line); background:rgba(0,0,0,.18); font-size:12px; color:var(--muted);}
+    .tab.active{color:var(--text); background:rgba(255,255,255,.10);}
+    .grid{display:grid; grid-template-columns: 1.15fr .85fr; gap:14px; width:100%;}
+    .grid3{display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:14px; width:100%;}
+    .table{width:100%; border-collapse:collapse; overflow:hidden; border-radius:14px; border:1px solid var(--line);}
+    .table th,.table td{padding:10px 10px; border-bottom:1px solid var(--line); font-size:12px; vertical-align:top;}
+    .table th{color:var(--muted); font-weight:600; text-align:left; background:rgba(0,0,0,.22);}
+    .mono{font-family:var(--mono)}
+    .badge{display:inline-flex; padding:4px 8px; border-radius:999px; font-size:11px; border:1px solid var(--line); background:rgba(0,0,0,.2);}
+    .badge.good{border-color: rgba(53,208,127,.35); color:#bff7d7}
+    .badge.warn{border-color: rgba(255,204,102,.35); color:#ffe3b2}
+    .badge.bad{border-color: rgba(255,92,122,.35); color:#ffb6c3}
+    .two{display:grid; grid-template-columns: 1fr 1fr; gap:10px;}
+    .three{display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px;}
+    .log{height:180px; overflow:auto; padding:10px; border-radius:14px; border:1px solid var(--line);
+         background:rgba(0,0,0,.25); font-family:var(--mono); font-size:11px; white-space:pre-wrap;}
+    .small{font-size:11px; color:var(--muted)}
+    .footer{margin-top:14px; color:var(--muted); font-size:11px}
+    @media (max-width: 980px){
+      .kpis{grid-template-columns: repeat(2, minmax(0,1fr));}
+      .grid{grid-template-columns: 1fr;}
+      .grid3{grid-template-columns: 1fr;}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="title">
+        <h1>Derivatives Mini-Chain</h1>
+        <div class="sub">Multi-node • Signed agreements • Gossip mempool • Mine blocks • Capacity enforced at mining</div>
+      </div>
+
+      <div class="row" style="gap:10px; align-items:center;">
+        <div class="chip">
+          <span class="dot" id="autoDot"></span>
+          <span>Auto-refresh</span>
+          <select id="autoMs" style="width:140px; padding:7px 10px;">
+            <option value="0">Off</option>
+            <option value="1000">1s</option>
+            <option value="1500" selected>1.5s</option>
+            <option value="2500">2.5s</option>
+          </select>
+        </div>
+        <div class="chip">
+          <span class="dot good"></span>
+          <span>UI Server</span>
+          <span class="mono">:8000</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <div class="row" style="align-items:center; justify-content:space-between;">
+        <div class="tabs" id="tabs"></div>
+
+        <div class="row" style="gap:10px; align-items:center;">
+          <div class="chip">
+            <span class="dot" id="selDot"></span>
+            <span>Selected Node</span>
+            <select id="selNode" style="width:180px; padding:7px 10px;">
+              <option value="5001" selected>Node 5001</option>
+              <option value="5002">Node 5002</option>
+              <option value="5003">Node 5003</option>
+            </select>
+          </div>
+          <button class="primary" id="btnRefresh">Refresh</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card" style="width:100%;">
+        <h2>Network Overview</h2>
+        <div class="kpis" id="netKpis"></div>
+      </div>
+    </div>
+
+    <div id="views"></div>
+
+    <div class="footer">
+      Tip: This UI uses a proxy (same origin) + can run your CLI scripts using the keystore on disk.
+    </div>
+  </div>
+
+<script>
+const NODES = ["5001","5002","5003"];
+
+const el = (id)=>document.getElementById(id);
+const tabsEl = el("tabs");
+const viewsEl = el("views");
+
+const state = {
+  tab: "Proposals",
+  selected: "5001",
+  autoMs: 1500,
+  usersByNode: {},
+  last: { }
+};
+
+const TABS = ["Proposals","Wallets","Mempool","Blockchain","Actions"];
+
+function badge(status){
+  const s = (status||"").toUpperCase();
+  let cls = "badge";
+  if (s === "OPEN" || s === "OK") cls += " good";
+  else if (s === "ACCEPTED") cls += " good";
+  else if (s === "EXPIRED") cls += " warn";
+  else if (s.includes("ERR") || s.includes("BAD") || s === "FAILED") cls += " bad";
+  return `<span class="${cls}">${s || "-"}</span>`;
+}
+
+function short(x, n=10){
+  if (!x) return "-";
+  const s = String(x);
+  if (s.length <= n) return s;
+  return s.slice(0, n) + "…" + s.slice(-6);
+}
+
+async function apiGet(port, path){
+  const r = await fetch(`/api/${port}${path}`);
+  return await r.json();
+}
+async function apiPost(port, path, body){
+  const r = await fetch(`/api/${port}${path}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body||{})});
+  return await r.json();
+}
+
+async function action(name, payload){
+  const r = await fetch(`/action/${name}`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload||{})});
+  return await r.json();
+}
+
+function renderTabs(){
+  tabsEl.innerHTML = "";
+  for (const t of TABS){
+    const b = document.createElement("button");
+    b.className = "tab" + (state.tab === t ? " active" : "");
+    b.textContent = t;
+    b.onclick = ()=>{ state.tab = t; renderView(); };
+    tabsEl.appendChild(b);
+  }
+}
+
+function setNodeDot(ok){
+  el("selDot").className = "dot " + (ok ? "good" : "bad");
+}
+
+function setAutoDot(){
+  el("autoDot").className = "dot " + (state.autoMs > 0 ? "good" : "warn");
+}
+
+function netKpiCard(title, value, sub){
+  return `
+    <div class="kpi">
+      <div class="label">${title}</div>
+      <div class="val">${value}</div>
+      <div class="small">${sub || ""}</div>
+    </div>
+  `;
+}
+
+async function refreshNetwork(){
+  const snaps = [];
+  for (const p of NODES){
+    const [health, mem, props] = await Promise.allSettled([
+      apiGet(p, "/health"),
+      apiGet(p, "/mempool"),
+      apiGet(p, "/proposals")
+    ]);
+
+    const h = health.status === "fulfilled" ? health.value : null;
+    const m = mem.status === "fulfilled" ? mem.value : null;
+    const pr = props.status === "fulfilled" ? props.value : null;
+
+    snaps.push({
+      port: p,
+      ok: !!(h && h.ok),
+      height: h?.tip_height ?? "-",
+      mempool: (m?.mempool?.length ?? "-"),
+      proposals: (pr?.open?.length ?? "-"),
+      peers: h?.peers?.length ?? "-"
+    });
+  }
+
+  // Selected node health
+  const selHealth = snaps.find(x=>x.port===state.selected);
+  setNodeDot(selHealth?.ok);
+
+  const kpis = [];
+  for (const s of snaps){
+    const dot = s.ok ? "good" : "bad";
+    kpis.push(netKpiCard(
+      `Node ${s.port}`,
+      `<span class="mono">${s.height}</span>`,
+      `<span class="chip" style="padding:4px 8px;"><span class="dot ${dot}"></span>mem ${s.mempool} • proposals ${s.proposals} • peers ${s.peers}</span>`
+    ));
+  }
+  el("netKpis").innerHTML = kpis.join("");
+
+  state.last.network = snaps;
+}
+
+async function loadUsers(port){
+  const u = await apiGet(port, "/users");
+  state.usersByNode[port] = u?.users || [];
+  return state.usersByNode[port];
+}
+
+function viewShell(leftHtml, rightHtml){
+  return `
+    <div class="grid" style="margin-top:14px;">
+      <div class="card">${leftHtml}</div>
+      <div class="card">${rightHtml}</div>
+    </div>
+  `;
+}
+
+async function renderProposals(){
+  const port = state.selected;
+  const [props, users] = await Promise.all([
+    apiGet(port, "/proposals"),
+    (state.usersByNode[port] ? Promise.resolve(state.usersByNode[port]) : loadUsers(port))
+  ]);
+
+  const open = props?.open || [];
+  const rows = open.map(p=>{
+    const terms = (()=>{ try{return JSON.parse(p.terms_json);}catch(e){return {};}})();
+    return `
+      <tr>
+        <td class="mono">${short(p.proposal_id, 18)}</td>
+        <td>${p.maker_user_id}</td>
+        <td>${terms.side || "-"}</td>
+        <td class="mono">${terms.qty ?? "-"}</td>
+        <td class="mono">${terms.price ?? "-"}</td>
+        <td class="mono">${new Date((terms.expires_at||0)*1000).toLocaleString()}</td>
+        <td>${badge(p.status)}</td>
+        <td>
+          <button class="primary" onclick="openAccept('${p.proposal_id}')">Accept</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  const left = `
+    <h2>Open Proposals (selected node ${port})</h2>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Proposal</th><th>Maker</th><th>Side</th><th>Qty</th><th>Price</th><th>Expiry</th><th>Status</th><th>Action</th>
+        </tr>
+      </thead>
+      <tbody>${rows || `<tr><td colspan="8" class="small">No open proposals on this node.</td></tr>`}</tbody>
+    </table>
+    <div class="small" style="margin-top:10px;">
+      What’s happening: proposals are app-layer records. Accepting creates an AGREEMENT tx and gossips it into peers’ mempools.
+    </div>
+  `;
+
+  const userOpts = users.map(u=>`<option value="${u.user_id}">${u.user_id}</option>`).join("");
+  const right = `
+    <h2>Create Proposal</h2>
+    <div class="two">
+      <div>
+        <div class="small">Maker</div>
+        <select id="makerSel">${userOpts}</select>
+      </div>
+      <div>
+        <div class="small">Underlying</div>
+        <input id="underlying" value="BTC"/>
+      </div>
+    </div>
+
+    <div class="two" style="margin-top:10px;">
+      <div>
+        <div class="small">Side</div>
+        <select id="sideSel">
+          <option value="LONG">LONG</option>
+          <option value="SHORT">SHORT</option>
+        </select>
+      </div>
+      <div>
+        <div class="small">Qty</div>
+        <input id="qty" type="number" value="1"/>
+      </div>
+    </div>
+
+    <div class="two" style="margin-top:10px;">
+      <div>
+        <div class="small">Price</div>
+        <input id="price" type="number" value="45000"/>
+      </div>
+      <div>
+        <div class="small">Collateral</div>
+        <input id="collateral" type="number" value="200"/>
+      </div>
+    </div>
+
+    <div style="margin-top:10px;">
+      <div class="small">Expiry (seconds)</div>
+      <input id="expiry" type="number" value="3600"/>
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <button class="primary" onclick="doPropose()">Create Proposal (signed)</button>
+      <button onclick="doMine()">Mine (selected node)</button>
+    </div>
+
+    <h2 style="margin-top:14px;">Activity</h2>
+    <div class="log" id="activityLog"></div>
+  `;
+
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+window.logLine = function(msg){
+  const box = document.getElementById("activityLog");
+  if (!box) return;
+  const t = new Date().toLocaleTimeString();
+  box.textContent = `[${t}] ${msg}\n` + box.textContent;
+};
+
+window.doPropose = async function(){
+  const port = state.selected;
+  const maker = el("makerSel").value;
+  const payload = {
+    node: `http://127.0.0.1:${port}`,
+    maker,
+    template: "FUTURES_V1",
+    underlying: el("underlying").value,
+    side: el("sideSel").value,
+    qty: Number(el("qty").value),
+    price: Number(el("price").value),
+    expiry: Number(el("expiry").value),
+    collateral: Number(el("collateral").value),
+  };
+  logLine(`Propose: ${payload.underlying} ${payload.side} qty=${payload.qty} price=${payload.price} coll=${payload.collateral}`);
+  const res = await action("propose", payload);
+  if (res.ok) {
+    const pid = res.parsed?.proposal_id || "(unknown)";
+    logLine(`✅ Proposal created: ${pid}`);
+  } else {
+    logLine(`❌ Propose failed: ${res.stderr || res.stdout}`);
+  }
+  await refreshAll();
+};
+
+window.openAccept = function(proposalId){
+  // quick modal-ish prompt
+  const taker = prompt("Enter taker user_id (e.g., bob):", "bob");
+  if (!taker) return;
+  doAccept(proposalId, taker);
+};
+
+window.doAccept = async function(proposal_id, taker){
+  const port = state.selected;
+  logLine(`Accept: proposal=${proposal_id} taker=${taker}`);
+  const res = await action("accept", {
+    node: `http://127.0.0.1:${port}`,
+    proposal_id,
+    taker
+  });
+  if (res.ok) {
+    const txid = res.parsed?.agreement_tx_id || "(tx?)";
+    logLine(`✅ Accepted. AGREEMENT tx created: ${txid} (gossiped to peers)`);
+  } else {
+    logLine(`❌ Accept failed: ${res.parsed?.message || res.stderr || res.stdout}`);
+  }
+  await refreshAll();
+};
+
+window.doMine = async function(){
+  const port = state.selected;
+  logLine(`Mine on node ${port} (capacity enforced)`);
+  const res = await action("mine", { node: `http://127.0.0.1:${port}`});
+  if (res.ok) {
+    logLine(`✅ Mined block height=${res.parsed?.mined_height} included=${res.parsed?.included_txs} remaining=${res.parsed?.remaining_in_mempool}`);
+  } else {
+    logLine(`❌ Mine failed: ${res.parsed?.message || res.stderr || res.stdout}`);
+  }
+  await refreshAll();
+};
+
+async function renderWallets(){
+  const port = state.selected;
+  const users = await (state.usersByNode[port] ? Promise.resolve(state.usersByNode[port]) : loadUsers(port));
+
+  const balances = [];
+  for (const u of users){
+    const b = await apiGet(port, `/balance/${u.address}`);
+    balances.push({u, b});
+  }
+
+  const rows = balances.map(({u,b})=>{
+    return `
+      <tr>
+        <td>${u.user_id}</td>
+        <td class="mono">${short(u.address, 20)}</td>
+        <td class="mono">${b.balance}</td>
+        <td class="mono">${b.locked}</td>
+        <td class="mono">${b.available}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const left = `
+    <h2>Wallets (selected node ${port})</h2>
+    <table class="table">
+      <thead>
+        <tr><th>User</th><th>Address</th><th>Balance</th><th>Locked</th><th>Available</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="small" style="margin-top:10px;">
+      What’s happening: balances + locked collateral live in SQLite per node. Collateral lock is required before acceptance.
+    </div>
+  `;
+
+  const opts = users.map(u=>`<option value="${u.user_id}">${u.user_id}</option>`).join("");
+  const right = `
+    <h2>Wallet Actions</h2>
+    <div class="two">
+      <div>
+        <div class="small">User</div>
+        <select id="wUser">${opts}</select>
+      </div>
+      <div>
+        <div class="small">Amount</div>
+        <input id="wAmt" type="number" value="500"/>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px;">
+      <button class="primary" onclick="doDeposit()">Faucet Deposit</button>
+      <button onclick="doLock()">Lock Collateral</button>
+    </div>
+    <h2 style="margin-top:14px;">Notes</h2>
+    <div class="small">
+      Deposit and lock are node-local state in this lab. In a full blockchain, balance changes would come from chain replay.
+    </div>
+  `;
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+window.doDeposit = async function(){
+  const port = state.selected;
+  const user = el("wUser").value;
+  const amt = Number(el("wAmt").value);
+  const res = await action("deposit", {node:`http://127.0.0.1:${port}`, user, amount:amt});
+  alert(res.ok ? `Deposited ${amt} to ${user}` : (res.parsed?.message || res.stderr || "Deposit failed"));
+  await refreshAll();
+};
+
+window.doLock = async function(){
+  const port = state.selected;
+  const user = el("wUser").value;
+  const amt = Number(el("wAmt").value);
+  const res = await action("lock", {node:`http://127.0.0.1:${port}`, user, amount:amt});
+  alert(res.ok ? `Locked ${amt} for ${user}` : (res.parsed?.message || res.stderr || "Lock failed"));
+  await refreshAll();
+};
+
+async function renderMempool(){
+  const port = state.selected;
+  const mp = await apiGet(port, "/mempool");
+  const rows = (mp.mempool || []).map(t=>{
+    return `
+      <tr>
+        <td class="mono">${short(t.tx_id, 18)}</td>
+        <td>${t.tx_type}</td>
+        <td class="mono">${t.created_at}</td>
+        <td class="mono">${short(t.payload_json, 40)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const left = `
+    <h2>Mempool (selected node ${port})</h2>
+    <table class="table">
+      <thead><tr><th>Tx</th><th>Type</th><th>Created</th><th>Payload</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4" class="small">Mempool empty.</td></tr>`}</tbody>
+    </table>
+    <div class="small" style="margin-top:10px;">
+      What’s happening: new transactions first live in mempool; mining selects up to capacity and removes only included txs.
+    </div>
+  `;
+
+  const right = `
+    <h2>Quick Actions</h2>
+    <button class="primary" onclick="doMine()">Mine on selected node</button>
+    <div class="small" style="margin-top:10px;">
+      Tip: accept on node5002, then watch node5001 mempool — tx should appear due to gossip.
+    </div>
+  `;
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+async function renderBlockchain(){
+  const port = state.selected;
+  const chain = await apiGet(port, "/chain?limit=20");
+  const blocks = chain.blocks || [];
+  const rows = blocks.map(b=>{
+    let txs = [];
+    try{ txs = JSON.parse(b.txs_json || "[]"); }catch(e){}
+    const types = txs.map(x=>x.tx_type).join(", ");
+    return `
+      <tr>
+        <td class="mono">${b.height}</td>
+        <td class="mono">${short(b.block_hash, 18)}</td>
+        <td class="mono">${short(b.prev_hash, 18)}</td>
+        <td class="mono">${new Date((b.ts||0)*1000).toLocaleString()}</td>
+        <td class="mono">${txs.length}</td>
+        <td>${types || "-"}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const left = `
+    <h2>Blockchain (selected node ${port})</h2>
+    <table class="table">
+      <thead><tr><th>Height</th><th>Hash</th><th>Prev</th><th>Time</th><th>Txs</th><th>Types</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="small" style="margin-top:10px;">
+      What’s happening: each node stores its chain in SQLite (blocks table). This lab doesn’t include full block consensus/fork-choice.
+    </div>
+  `;
+
+  const right = `
+    <h2>Mine</h2>
+    <button class="primary" onclick="doMine()">Mine on selected node</button>
+    <div class="small" style="margin-top:10px;">
+      If mempool has fewer txs than capacity, the block is still finalized (not “half-filled”). New txs go into mempool for later blocks.
+    </div>
+  `;
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+async function renderActions(){
+  const port = state.selected;
+  const right = `
+    <h2>Runbook</h2>
+    <div class="small">
+      Suggested flow:
+      <ol>
+        <li>Wallets → Deposit + Lock for both users</li>
+        <li>Proposals → Create proposal</li>
+        <li>Proposals → Accept proposal (creates tx, gossips)</li>
+        <li>Mempool → verify tx on multiple nodes</li>
+        <li>Blockchain → Mine on any node</li>
+      </ol>
+      Next upgrade: Oracle + Settlement tx.
+    </div>
+  `;
+  const left = `
+    <h2>Live Checks (node ${port})</h2>
+    <div class="three">
+      <button onclick="quick('health')">Health</button>
+      <button onclick="quick('proposals')">Proposals</button>
+      <button onclick="quick('mempool')">Mempool</button>
+    </div>
+    <div class="log" id="quickLog" style="margin-top:12px;"></div>
+  `;
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+window.quick = async function(kind){
+  const port = state.selected;
+  const box = document.getElementById("quickLog");
+  const map = {health:"/health", proposals:"/proposals", mempool:"/mempool"};
+  const data = await apiGet(port, map[kind]);
+  box.textContent = JSON.stringify(data, null, 2);
+};
+
+async function renderView(){
+  renderTabs();
+  if (state.tab === "Proposals") return renderProposals();
+  if (state.tab === "Wallets") return renderWallets();
+  if (state.tab === "Mempool") return renderMempool();
+  if (state.tab === "Blockchain") return renderBlockchain();
+  if (state.tab === "Actions") return renderActions();
+}
+
+async function refreshAll(){
+  await refreshNetwork();
+  await renderView();
+}
+
+let timer = null;
+function setAuto(ms){
+  state.autoMs = ms;
+  setAutoDot();
+  if (timer) { clearInterval(timer); timer = null; }
+  if (ms > 0){
+    timer = setInterval(()=>refreshAll().catch(()=>{}), ms);
+  }
+}
+
+el("selNode").addEventListener("change", async (e)=>{
+  state.selected = e.target.value;
+  await refreshAll();
+});
+
+el("autoMs").addEventListener("change", (e)=>{
+  setAuto(Number(e.target.value));
+});
+
+el("btnRefresh").addEventListener("click", ()=>refreshAll());
+
+(async function init(){
+  state.selected = el("selNode").value;
+  renderTabs();
+  setAuto(state.autoMs);
+  await refreshAll();
+})();
+</script>
+</body>
+</html>

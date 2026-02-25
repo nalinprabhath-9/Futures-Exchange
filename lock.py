@@ -14,7 +14,7 @@ def main():
     ap.add_argument("--user", required=True)
     ap.add_argument("--amount", type=int, required=True)
     args = ap.parse_args()
-    print(post(args.node.rstrip("/") + "/deposit", {"user_id": args.user, "amount": args.amount}))
+    print(post(args.node.rstrip("/") + "/lock", {"user_id": args.user, "amount": args.amount}))
 
 if __name__ == "__main__":
     main()

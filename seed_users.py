@@ -1,42 +1,54 @@
-import json, os, sqlite3
+from __future__ import annotations
+import argparse
+import json
+import os
+import uuid
+from typing import Any, Dict, List
+
 from crypto_utils import generate_keypair
-from templates import COIN_DECIMALS
-from common import now_unix
-from db import init_db
 
-PORT = int(os.environ.get("PORT", "5001"))
-DB_PATH = os.environ.get("DB_PATH", f"node_{PORT}.db")
-OUTFILE = os.environ.get("OUTFILE", f"users_{PORT}.json")
+def ensure_dir(p: str) -> None:
+    os.makedirs(p, exist_ok=True)
 
-conn = sqlite3.connect(DB_PATH)
-conn.row_factory = sqlite3.Row
-conn.execute("PRAGMA foreign_keys=ON;")
-conn.execute("PRAGMA journal_mode=WAL;")
-init_db(conn)
+def make_user(name: str, initial_balance: int, keystore_dir: str) -> Dict[str, Any]:
+    user_id = name.strip().lower()
+    address = "addr_" + uuid.uuid4().hex[:16]
 
-ts = now_unix()
-users_out = []
-for i in range(5):
-    kp = generate_keypair()
-    pub = kp.public_key_hex()
-    priv = kp.private_key_hex()
-    alias = f"User{i+1}"
+    priv_pem, pub_b64 = generate_keypair()
 
-    conn.execute(
-        "INSERT OR IGNORE INTO users(pubkey, alias, created_at) VALUES (?, ?, ?)",
-        (pub, alias, ts),
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO wallets(pubkey, balance_sats, reserved_sats, created_at) VALUES (?, ?, 0, ?)",
-        (pub, int(200000 * COIN_DECIMALS), ts),
-    )
+    ensure_dir(keystore_dir)
+    key_path = os.path.join(keystore_dir, f"{user_id}.pem")
+    with open(key_path, "w", encoding="utf-8") as f:
+        f.write(priv_pem)
 
-    users_out.append({"alias": alias, "pubkey": pub, "private_key_hex": priv})
+    return {
+        "user_id": user_id,
+        "name": name,
+        "address": address,
+        "pubkey_b64": pub_b64,
+        "balance": int(initial_balance),
+        "keystore_path": key_path,
+    }
 
-conn.commit()
-conn.close()
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--names", default="Alice,Bob,Carol")
+    ap.add_argument("--balance", type=int, default=2000)
+    ap.add_argument("--keystore", default="keystore")
+    args = ap.parse_args()
 
-with open(OUTFILE, "w") as f:
-    json.dump(users_out, f, indent=2)
+    users: List[Dict[str, Any]] = []
+    for n in [x.strip() for x in args.names.split(",") if x.strip()]:
+        users.append(make_user(n, args.balance, args.keystore))
 
-print(f"Seeded 5 users into {DB_PATH} and wrote keys to {OUTFILE}")
+    public_users = [{k: u[k] for k in ("user_id","name","address","pubkey_b64","balance")} for u in users]
+
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump({"users": public_users}, f, indent=2)
+
+    print(f"[seed] wrote {len(users)} users to {args.out}")
+    print(f"[seed] private keys: {args.keystore}/<user>.pem")
+
+if __name__ == "__main__":
+    main()

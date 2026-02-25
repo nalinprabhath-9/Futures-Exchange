@@ -1,56 +1,60 @@
 from __future__ import annotations
-
+import base64
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Tuple
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives import serialization
 
-from common import stable_json, b64e, b64d
+def b64e(b: bytes) -> str:
+    return base64.b64encode(b).decode("ascii")
 
+def b64d(s: str) -> bytes:
+    return base64.b64decode(s.encode("ascii"))
 
-@dataclass(frozen=True)
-class KeyPair:
-    private_key: Ed25519PrivateKey
-    public_key: Ed25519PublicKey
+def generate_keypair() -> Tuple[str, str]:
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key()
 
-    def public_key_hex(self) -> str:
-        pk_bytes = self.public_key.public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        )
-        return pk_bytes.hex()
+    pub_raw = pub.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    )
+    pub_b64 = b64e(pub_raw)
 
-    def private_key_hex(self) -> str:
-        sk_bytes = self.private_key.private_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PrivateFormat.Raw,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
-        return sk_bytes.hex()
+    priv_pem = priv.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
 
-    @staticmethod
-    def from_private_key_hex(sk_hex: str) -> "KeyPair":
-        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(sk_hex))
-        return KeyPair(private_key=sk, public_key=sk.public_key())
+    return priv_pem, pub_b64
 
+def load_private_key_from_pem(pem_text: str) -> Ed25519PrivateKey:
+    key = serialization.load_pem_private_key(pem_text.encode("utf-8"), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise ValueError("Not an Ed25519 private key")
+    return key
 
-def generate_keypair() -> KeyPair:
-    sk = Ed25519PrivateKey.generate()
-    return KeyPair(private_key=sk, public_key=sk.public_key())
+def load_public_key_from_b64(pub_b64: str) -> Ed25519PublicKey:
+    raw = b64d(pub_b64)
+    return Ed25519PublicKey.from_public_bytes(raw)
 
-
-def sign_payload(private_key: Ed25519PrivateKey, payload: Dict[str, Any]) -> str:
-    msg = stable_json(payload).encode("utf-8")
-    sig = private_key.sign(msg)
+def sign(priv_pem: str, message: bytes) -> str:
+    priv = load_private_key_from_pem(priv_pem)
+    sig = priv.sign(message)
     return b64e(sig)
 
-
-def verify_signature(public_key_hex: str, payload: Dict[str, Any], signature_b64: str) -> bool:
+def verify(pub_b64: str, message: bytes, sig_b64: str) -> bool:
     try:
-        pk = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key_hex))
-        msg = stable_json(payload).encode("utf-8")
-        pk.verify(b64d(signature_b64), msg)
+        pub = load_public_key_from_b64(pub_b64)
+        pub.verify(b64d(sig_b64), message)
         return True
     except Exception:
         return False
+
+@dataclass(frozen=True)
+class Identity:
+    user_id: str
+    address: str
+    pubkey_b64: str

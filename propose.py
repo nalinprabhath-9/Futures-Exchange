@@ -1,38 +1,77 @@
-import json, os, requests
-from crypto_utils import KeyPair, sign_payload
-from common import now_unix, new_nonce
+from __future__ import annotations
+import argparse, json, urllib.request, uuid
+from common import stable_json, hash_obj
+from crypto_utils import sign
+from client_keys import read_pem
+from templates import validate_and_build
 
-NODE = os.environ.get("NODE", "http://127.0.0.1:5001")
-USERS_FILE = os.environ.get("USERS_FILE", "users_5001.json")
-ALIAS = os.environ.get("ALIAS", "User1")
+def post(url: str, payload: dict) -> dict:
+    data = stable_json(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"Content-Type":"application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=4) as r:
+        return json.loads(r.read().decode("utf-8"))
 
-TEMPLATE_ID = os.environ.get("TEMPLATE_ID", "BTCZPH-1")
-SIDE = os.environ.get("SIDE", "LONG")
-QTY = int(os.environ.get("QTY", "2"))
-ENTRY_PRICE = float(os.environ.get("ENTRY_PRICE", "60000"))
-EXPIRY_SECS = int(os.environ.get("EXPIRY_SECS", "3600"))
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--node", required=True)
+    ap.add_argument("--maker", required=True)
+    ap.add_argument("--key", required=True)
+    ap.add_argument("--template", default="FUTURES_V1")
+    ap.add_argument("--underlying", default="BTC")
+    ap.add_argument("--side", required=True, choices=["LONG","SHORT"])
+    ap.add_argument("--qty", type=int, required=True)
+    ap.add_argument("--price", type=int, required=True)
+    ap.add_argument("--expiry", type=int, default=3600)
+    ap.add_argument("--collateral", type=int, required=True)
+    args = ap.parse_args()
 
-users = json.load(open(USERS_FILE))
-u = next(x for x in users if x["alias"] == ALIAS)
-kp = KeyPair.from_private_key_hex(u["private_key_hex"])
-pub = kp.public_key_hex()
+    base = args.node.rstrip("/")
 
-payload = {
-    "proposer_pubkey": pub,
-    "template_id": TEMPLATE_ID,
-    "side": SIDE,
-    "quantity": QTY,
-    "entry_price": ENTRY_PRICE,
-    "expiry_unix": now_unix() + EXPIRY_SECS,
-    "created_at": now_unix(),
-    "nonce": new_nonce(),
-}
-sig = sign_payload(kp.private_key, payload)
+    with urllib.request.urlopen(base + "/users", timeout=4) as r:
+        users = json.loads(r.read().decode("utf-8"))["users"]
+    maker = next((u for u in users if u["user_id"] == args.maker), None)
+    if not maker:
+        raise SystemExit(f"maker {args.maker} not registered on node (import users first)")
 
-r = requests.post(f"{NODE}/propose", json={
-    "payload": payload,
-    "signer_pubkey": pub,
-    "signature_b64": sig,
-}, timeout=5)
+    terms = {
+        "underlying": args.underlying,
+        "side": args.side,
+        "qty": args.qty,
+        "price": args.price,
+        "expiry_seconds": args.expiry,
+        "collateral": args.collateral
+    }
 
-print(r.status_code, r.json())
+    version, built_terms, required = validate_and_build(args.template, terms)
+    proposal_id = uuid.uuid4().hex
+
+    canonical = {
+        "proposal_id": proposal_id,
+        "template_id": args.template,
+        "version": version,
+        "maker_user_id": args.maker,
+        "maker_address": maker["address"],
+        "maker_pubkey_b64": maker["pubkey_b64"],
+        "terms": built_terms,
+        "created_at": built_terms["created_at"],
+        "expires_at": built_terms["expires_at"],
+        "required_collateral": required,
+    }
+    payload_hash = hash_obj(canonical)
+
+    sig = sign(read_pem(args.key), payload_hash.encode("utf-8"))
+
+    req = {
+        "proposal_id": proposal_id,
+        "maker_user_id": args.maker,
+        "template_id": args.template,
+        "terms": terms,
+        "payload_hash": payload_hash,
+        "maker_signature_b64": sig,
+    }
+
+    res = post(base + "/propose", req)
+    print(json.dumps(res))
+
+if __name__ == "__main__":
+    main()
