@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 
 from transaction_enums import TransactionType, TradeState, TemplateType
+from crypto_utils import sign_message, get_signing_key_from_hex, get_compressed_pubkey, verify_signature
 
 
 CRYPTOCURRENCY_NAME = "FutureCoin"
@@ -578,7 +579,13 @@ class TxnMemoryPool:
         self.transactions = []
     
     def add_transaction(self, transaction: Transaction):
-        """Add a transaction to the memory pool"""
+        """Add a transaction to the memory pool, verifying signature if present"""
+        # Signature verification for FuturesTransaction
+        if hasattr(transaction, 'signature') and hasattr(transaction, 'pubkey'):
+            if transaction.signature and transaction.pubkey:
+                if not verify_signature(transaction.pubkey, transaction.get_signing_data(), transaction.signature):
+                    print(f"Rejected transaction {transaction.TransactionHash[:16]}...: invalid signature!")
+                    return
         self.transactions.append(transaction)
         print(f"Added transaction {transaction.TransactionHash[:16]}... to mempool (size: {len(self.transactions)})")
     
@@ -822,7 +829,9 @@ class FuturesTransaction(Transaction):
                  settlement_price: float = None,
                  winner: str = None,
                  winner_payout: int = None,
-                 loser_payout: int = None):
+                 loser_payout: int = None,
+                 signature: bytes = None,
+                 pubkey: bytes = None):
         """
         Initialize a futures transaction
         
@@ -841,6 +850,8 @@ class FuturesTransaction(Transaction):
             winner: Address of winner (filled at settlement)
             winner_payout: Amount winner receives
             loser_payout: Amount loser receives (usually 0)
+            signature: ECDSA signature (bytes)
+            pubkey: Compressed public key (bytes)
         """
         self.trade_id = trade_id
         self.tx_type = tx_type
@@ -857,6 +868,8 @@ class FuturesTransaction(Transaction):
         self.winner_payout = winner_payout
         self.loser_payout = loser_payout
         self.timestamp = int(time.time())
+        self.signature = signature
+        self.pubkey = pubkey
         
         # Use base Transaction for hash calculation
         # Serialize futures data as inputs/outputs
@@ -889,6 +902,28 @@ class FuturesTransaction(Transaction):
             f"{self.collateral_amount or 0}"
             f"{self.state.value}"
         )
+    
+    def get_signing_data(self) -> bytes:
+        """Return the canonical bytes to be signed for this transaction."""
+        # Use the same serialization as for hash, but as bytes
+        data = (
+            str(self.trade_id) +
+            str(self.tx_type.value) +
+            str(self.party_a or '') +
+            str(self.party_b or '') +
+            str(self.template_type.value if self.template_type else '') +
+            str(self.asset_pair or '') +
+            str(self.strike_price or 0) +
+            str(self.expiry_timestamp or 0) +
+            str(self.collateral_amount or 0) +
+            str(self.state.value) +
+            str(self.settlement_price or 0) +
+            str(self.winner or '') +
+            str(self.winner_payout or 0) +
+            str(self.loser_payout or 0) +
+            str(self.timestamp)
+        )
+        return data.encode('utf-8')
     
     def to_dict(self) -> dict:
         """Convert to dictionary for storage/transmission"""
@@ -954,25 +989,14 @@ def create_propose_trade_transaction(trade_id: str,
                                     asset_pair: str,
                                     strike_price: float,
                                     expiry_hours: int,
-                                    collateral_amount: int) -> FuturesTransaction:
+                                    collateral_amount: int,
+                                    privkey_hex: str = None) -> FuturesTransaction:
     """
     Helper to create a trade proposal transaction
-    
-    Args:
-        trade_id: Unique identifier
-        party_a: Proposer's address
-        template_type: UP_DOWN, LONG_SHORT, etc.
-        asset_pair: e.g., "BTC/USD"
-        strike_price: Reference price
-        expiry_hours: Hours until expiry
-        collateral_amount: Milli-coins each party stakes
-    
-    Returns:
-        FuturesTransaction
+    If privkey_hex is provided, sign the transaction.
     """
     expiry_timestamp = int(time.time()) + (expiry_hours * 3600)
-    
-    return FuturesTransaction(
+    tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.PROPOSE_TRADE,
         party_a=party_a,
@@ -983,15 +1007,25 @@ def create_propose_trade_transaction(trade_id: str,
         collateral_amount=collateral_amount,
         state=TradeState.PROPOSED
     )
+    if privkey_hex:
+        sk = get_signing_key_from_hex(privkey_hex)
+        tx.signature = sign_message(sk, tx.get_signing_data())
+        tx.pubkey = get_compressed_pubkey(sk.verifying_key)
+    return tx
 
-def create_accept_trade_transaction(trade_id: str, party_b: str) -> FuturesTransaction:
-    """Helper to create a trade acceptance transaction"""
-    return FuturesTransaction(
+def create_accept_trade_transaction(trade_id: str, party_b: str, privkey_hex: str = None) -> FuturesTransaction:
+    """Helper to create a trade acceptance transaction (signed if privkey_hex provided)"""
+    tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.ACCEPT_TRADE,
         party_b=party_b,
         state=TradeState.ACCEPTED
     )
+    if privkey_hex:
+        sk = get_signing_key_from_hex(privkey_hex)
+        tx.signature = sign_message(sk, tx.get_signing_data())
+        tx.pubkey = get_compressed_pubkey(sk.verifying_key)
+    return tx
 
 def create_deposit_collateral_transaction(trade_id: str) -> FuturesTransaction:
     """Helper to create a collateral deposit transaction"""
@@ -1005,9 +1039,10 @@ def create_settle_trade_transaction(trade_id: str,
                                    settlement_price: float,
                                    winner: str,
                                    winner_payout: int,
-                                   loser_payout: int = 0) -> FuturesTransaction:
-    """Helper to create a settlement transaction"""
-    return FuturesTransaction(
+                                   loser_payout: int = 0,
+                                   privkey_hex: str = None) -> FuturesTransaction:
+    """Helper to create a settlement transaction (signed if privkey_hex provided)"""
+    tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.SETTLE_TRADE,
         settlement_price=settlement_price,
@@ -1016,3 +1051,8 @@ def create_settle_trade_transaction(trade_id: str,
         loser_payout=loser_payout,
         state=TradeState.SETTLED
     )
+    if privkey_hex:
+        sk = get_signing_key_from_hex(privkey_hex)
+        tx.signature = sign_message(sk, tx.get_signing_data())
+        tx.pubkey = get_compressed_pubkey(sk.verifying_key)
+    return tx
