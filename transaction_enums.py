@@ -12,18 +12,17 @@ class TransactionType(Enum):
     TRANSFER = "transfer"      # Send coins between users
     PROPOSE_TRADE = "propose_trade"
     ACCEPT_TRADE = "accept_trade"
-    DEPOSIT_COLLATERAL = "deposit_collateral"
+    CANCEL_PROPOSAL = "cancel_proposal"        # party_a withdraws an unaccepted proposal
     SETTLE_TRADE = "settle_trade"
-    CANCEL_TRADE = "cancel_trade"
+    CANCEL_TRADE = "cancel_trade"              # Mutual cancellation of an active trade (requires both signatures)
 
 class TradeState(Enum):
     """States a futures trade can be in"""
     PROPOSED = "proposed"
-    ACCEPTED = "accepted"
-    COLLATERAL_LOCKED = "collateral_locked"
     ACTIVE = "active"
     SETTLED = "settled"
     CANCELLED = "cancelled"
+    EXPIRED = "expired"                        # Proposal timed out before acceptance
 
 class TemplateType(Enum):
     """Types of futures templates"""

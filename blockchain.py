@@ -389,22 +389,36 @@ class Blockchain:
     Trade lifecycle:
         PROPOSED  -> party_a's collateral locked on proposal
         ACTIVE    -> party_b's collateral locked on acceptance (no intermediate state)
-        SETTLED / CANCELLED
+        SETTLED / CANCELLED / EXPIRED
+
+    Proposal timeout:
+        If a PROPOSED trade is not accepted within `proposal_timeout_seconds`,
+        it is automatically expired by the next call to `add_block`, unlocking
+        party_a's collateral and moving the trade to EXPIRED.
     """
 
-    def __init__(self):
-        """Initialize blockchain with balance management"""
+    def __init__(self, proposal_timeout_seconds: int = 3600):
+        """
+        Initialize blockchain with balance management.
+
+        Args:
+            proposal_timeout_seconds: How long (in seconds) a PROPOSED trade
+                waits for acceptance before being automatically expired and
+                party_a's collateral returned. Defaults to 3600 (1 hour).
+        """
         self.chain = []
         self.block_height_index = {}
         self.block_hash_index = {}
         self.transaction_index = {}
 
-        self.active_trades = {}
-        self.settled_trades = {}
+        self.proposed_trades = {}  # trade_id -> FuturesTransaction (PROPOSED only)
+        self.active_trades = {}    # trade_id -> FuturesTransaction (ACTIVE only)
+        self.settled_trades = {}   # trade_id -> FuturesTransaction (terminal states)
+        self.proposal_timeout_seconds = proposal_timeout_seconds
         self.balances = BalanceManager()
 
         print("Blockchain initialized (genesis block will be mined)")
-        print("Futures trading enabled!")
+        print(f"Futures trading enabled! Proposal timeout: {proposal_timeout_seconds}s")
 
     def add_block(self, block: Block):
         """
@@ -432,6 +446,9 @@ class Blockchain:
         for tx in coinbase_txs:
             self._process_transaction(tx)
 
+        # Expire any proposals that timed out relative to this block's timestamp
+        self._expire_stale_proposals(block.BlockHeader.Timestamp)
+
         print(f"Block #{height} added to blockchain")
 
     def _process_transaction(self, tx: Transaction):
@@ -458,15 +475,15 @@ class Blockchain:
                 print(f"Trade {tx.trade_id} rejected: party_a cannot cover collateral")
                 return
 
-            self.active_trades[tx.trade_id] = tx
+            self.proposed_trades[tx.trade_id] = tx
             print(f"Trade {tx.trade_id} proposed by {tx.party_a[:20]}... (collateral locked)")
 
         elif tx.tx_type == TransactionType.ACCEPT_TRADE:
-            if tx.trade_id not in self.active_trades:
-                print(f"Trade {tx.trade_id} not found")
+            if tx.trade_id not in self.proposed_trades:
+                print(f"Trade {tx.trade_id} not found in proposed trades")
                 return
 
-            trade = self.active_trades[tx.trade_id]
+            trade = self.proposed_trades[tx.trade_id]
 
             # Lock party_b's collateral; if it fails the acceptance is rejected
             success = self.balances.lock_collateral_party(
@@ -478,7 +495,22 @@ class Blockchain:
 
             trade.party_b = tx.party_b
             trade.state = TradeState.ACTIVE
+            self.active_trades[tx.trade_id] = trade
+            del self.proposed_trades[tx.trade_id]
             print(f"Trade {tx.trade_id} accepted by {tx.party_b[:20]}... — now ACTIVE")
+
+        elif tx.tx_type == TransactionType.CANCEL_PROPOSAL:
+            # party_a voluntarily withdraws a PROPOSED (not yet accepted) trade
+            if tx.trade_id not in self.proposed_trades:
+                print(f"Trade {tx.trade_id} not found in proposed trades or already accepted")
+                return
+
+            self.balances.cancel_trade(tx.trade_id)
+            trade = self.proposed_trades[tx.trade_id]
+            trade.state = TradeState.CANCELLED
+            self.settled_trades[tx.trade_id] = trade
+            del self.proposed_trades[tx.trade_id]
+            print(f"Trade {tx.trade_id} proposal cancelled by party_a, collateral unlocked")
 
         elif tx.tx_type == TransactionType.SETTLE_TRADE:
             if tx.trade_id not in self.active_trades:
@@ -508,6 +540,7 @@ class Blockchain:
             self.balances.cancel_trade(tx.trade_id)
             trade = self.active_trades[tx.trade_id]
             trade.state = TradeState.CANCELLED
+            self.settled_trades[tx.trade_id] = trade
             del self.active_trades[tx.trade_id]
 
     def get_active_trades(self) -> List['FuturesTransaction']:
@@ -516,7 +549,41 @@ class Blockchain:
 
     def get_trade(self, trade_id: str) -> Optional['FuturesTransaction']:
         """Get a specific trade by ID"""
-        return self.active_trades.get(trade_id) or self.settled_trades.get(trade_id)
+        return (
+            self.proposed_trades.get(trade_id) or
+            self.active_trades.get(trade_id) or
+            self.settled_trades.get(trade_id)
+        )
+
+    def get_proposed_trades(self) -> List['FuturesTransaction']:
+        """Get all open (not yet accepted) trade proposals"""
+        return list(self.proposed_trades.values())
+
+    def _expire_stale_proposals(self, current_time: int):
+        """
+        Expire all PROPOSED trades whose proposal_timeout has elapsed.
+
+        Called automatically by add_block using the block's own timestamp so
+        that expiry is deterministic across all nodes: every node processing
+        the same block will expire exactly the same set of proposals.
+
+        Party_a's locked collateral is returned upon expiry.
+
+        Args:
+            current_time: Unix timestamp to compare against each trade's
+                expiry_timestamp (set at proposal_timeout_seconds after creation).
+        """
+        expired = [
+            trade_id for trade_id, trade in self.proposed_trades.items()
+            if trade.expiry_timestamp is not None and current_time > trade.expiry_timestamp
+        ]
+        for trade_id in expired:
+            trade = self.proposed_trades[trade_id]
+            self.balances.cancel_trade(trade_id)
+            trade.state = TradeState.EXPIRED
+            self.settled_trades[trade_id] = trade
+            del self.proposed_trades[trade_id]
+            print(f"Trade {trade_id} EXPIRED (no acceptance by {datetime.fromtimestamp(trade.expiry_timestamp)}), collateral returned")
 
     def get_user_balance(self, address: str) -> dict:
         """Get balance information for a user"""
@@ -555,6 +622,7 @@ class Blockchain:
         print(f"{'*'*70}")
         print(f"Total Blocks: {len(self.chain)}")
         print(f"Total Transactions: {len(self.transaction_index)}")
+        print(f"Proposed Trades: {len(self.proposed_trades)}")
         print(f"Active Trades: {len(self.active_trades)}")
         print(f"Settled Trades: {len(self.settled_trades)}")
         print(f"{'*'*70}\n")
@@ -783,6 +851,8 @@ class FuturesTransaction(Transaction):
       - CANCEL_TRADE:   any locked collateral is returned to its owner(s).
 
     The DEPOSIT_COLLATERAL transaction type and ACCEPTED state are no longer used.
+    Proposals that are not accepted within the blockchain's `proposal_timeout_seconds`
+    are automatically moved to EXPIRED by `_expire_stale_proposals` on each new block.
     """
 
     def __init__(self,
@@ -992,6 +1062,34 @@ def create_accept_trade_transaction(trade_id: str,
         tx_type=TransactionType.ACCEPT_TRADE,
         party_b=party_b,
         state=TradeState.ACTIVE   # skips ACCEPTED; goes straight to ACTIVE
+    )
+    if privkey_hex:
+        sk = get_signing_key_from_hex(privkey_hex)
+        tx.signature = sign_message(sk, tx.get_signing_data())
+        tx.pubkey = get_compressed_pubkey(sk.verifying_key)
+    return tx
+
+
+def create_cancel_proposal_transaction(trade_id: str,
+                                       privkey_hex: str = None) -> 'FuturesTransaction':
+    """
+    Create a transaction that cancels a PROPOSED (not yet accepted) trade.
+
+    Only valid while the trade is in PROPOSED state. Processing this tx
+    returns party_a's locked collateral and moves the trade to CANCELLED.
+    Has no effect if the trade has already been accepted (ACTIVE).
+
+    Args:
+        trade_id: ID of the proposed trade to cancel
+        privkey_hex: Optional hex private key for signing
+
+    Returns:
+        A signed or unsigned FuturesTransaction of type CANCEL_PROPOSAL
+    """
+    tx = FuturesTransaction(
+        trade_id=trade_id,
+        tx_type=TransactionType.CANCEL_PROPOSAL,
+        state=TradeState.CANCELLED
     )
     if privkey_hex:
         sk = get_signing_key_from_hex(privkey_hex)

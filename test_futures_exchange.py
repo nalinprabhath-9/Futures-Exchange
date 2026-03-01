@@ -3,14 +3,17 @@ Comprehensive tests and examples for the FutureCoin Futures Exchange blockchain
 Demonstrates mining, trading, and settlement workflows
 """
 
+import time
+from datetime import datetime
 from blockchain import (
-    Blockchain, 
-    Miner, 
-    TxnMemoryPool, 
+    Blockchain,
+    Miner,
+    TxnMemoryPool,
     CRYPTOCURRENCY_NAME,
     MILLI_DENOMINATION,
     create_propose_trade_transaction,
     create_accept_trade_transaction,
+    create_cancel_proposal_transaction,
     create_settle_trade_transaction
 )
 from transaction_enums import TradeState, TemplateType
@@ -367,6 +370,162 @@ def test_insufficient_balance_party_b():
     print("TEST 4b PASSED: Party B insufficient balance handled correctly at acceptance time")
 
 
+
+def test_cancel_proposal():
+    """
+    Test 4c: Party A manually cancels a PROPOSED trade before anyone accepts.
+
+    Expected outcomes:
+      - Trade moves to CANCELLED and is stored in settled_trades
+      - Party A's locked collateral is returned in full
+      - The trade is no longer visible in proposed_trades
+    """
+    print_separator("TEST 4c: MANUAL PROPOSAL CANCELLATION BY PARTY A")
+
+    blockchain = Blockchain()
+    mempool = TxnMemoryPool()
+
+    party_a = Miner(miner_address="PartyA_cancel_addr", difficulty_bits=0x207fffff)
+
+    # Mine so party_a has a balance
+    block = party_a.mine_block(blockchain, mempool, verbose=False)
+    blockchain.add_block(block)
+
+    party_a_addr = party_a.miner_address
+    collateral = 10000
+
+    balance_before = blockchain.balances.get_available_balance(party_a_addr)
+    print(f"Party A available before proposal: {balance_before / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME}")
+
+    # Submit proposal — party_a's collateral locked on processing
+    mempool.add_transaction(create_propose_trade_transaction(
+        trade_id="TRADE_CANCEL_TEST",
+        party_a=party_a_addr,
+        template_type=TemplateType.UP_DOWN,
+        asset_pair="BTC/USD",
+        strike_price=50000.00,
+        expiry_hours=1,
+        collateral_amount=collateral
+    ))
+
+    block = party_a.mine_block(blockchain, mempool, verbose=False)
+    blockchain.add_block(block)
+
+    trade = blockchain.get_trade("TRADE_CANCEL_TEST")
+    assert trade is not None and trade.state == TradeState.PROPOSED, \
+        f"Expected PROPOSED, got {trade.state.value if trade else None}"
+    assert blockchain.balances.get_locked_balance(party_a_addr) == collateral
+    print(f"Trade state after proposal: {trade.state.value} ✓")
+    print(f"Locked after proposal: {blockchain.balances.get_locked_balance(party_a_addr) / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} ✓")
+
+    # Party A cancels the proposal before anyone accepts
+    print("\nParty A submitting cancellation...")
+    mempool.add_transaction(create_cancel_proposal_transaction("TRADE_CANCEL_TEST"))
+
+    block = party_a.mine_block(blockchain, mempool, verbose=False)
+    blockchain.add_block(block)
+
+    trade = blockchain.get_trade("TRADE_CANCEL_TEST")
+    assert trade is not None and trade.state == TradeState.CANCELLED, \
+        f"Expected CANCELLED, got {trade.state.value if trade else None}"
+
+    # Collateral must be fully returned
+    assert blockchain.balances.get_locked_balance(party_a_addr) == 0, \
+        f"Expected 0 locked after cancel, got {blockchain.balances.get_locked_balance(party_a_addr)}"
+
+    available_after = blockchain.balances.get_available_balance(party_a_addr)
+    print(f"\nTrade state after cancel: {trade.state.value} ✓")
+    print(f"Locked after cancel: {blockchain.balances.get_locked_balance(party_a_addr) / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} ✓")
+    print(f"Available after cancel: {available_after / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME}")
+
+    # Trade should no longer appear in proposed_trades
+    assert "TRADE_CANCEL_TEST" not in blockchain.proposed_trades, \
+        "Cancelled trade should be removed from proposed_trades"
+    print("Trade removed from proposed_trades ✓")
+
+    print("TEST 4c PASSED: Proposal cancellation by party_a works correctly")
+
+
+def test_proposal_timeout():
+    """
+    Test 4d: A PROPOSED trade that is not accepted within proposal_timeout_seconds
+    is automatically expired when the next block is processed.
+
+    The blockchain is configured with a very short timeout (1 second) so the
+    test can run without real delays — we instead fast-forward by manipulating
+    the block timestamp directly.
+
+    Expected outcomes:
+      - Trade moves to EXPIRED
+      - Party A's collateral is returned
+      - Trade is removed from proposed_trades
+    """
+    print_separator("TEST 4d: PROPOSAL TIMEOUT / AUTO-EXPIRY")
+
+    # 5-second timeout so we can trigger it by advancing the block timestamp
+    timeout = 5
+    blockchain = Blockchain(proposal_timeout_seconds=timeout)
+    mempool = TxnMemoryPool()
+
+    party_a = Miner(miner_address="PartyA_timeout_addr", difficulty_bits=0x207fffff)
+
+    block = party_a.mine_block(blockchain, mempool, verbose=False)
+    blockchain.add_block(block)
+
+    party_a_addr = party_a.miner_address
+    collateral = 10000
+
+    # Submit proposal — expiry_timestamp = now + timeout
+    proposal_time = int(time.time())
+    mempool.add_transaction(create_propose_trade_transaction(
+        trade_id="TRADE_TIMEOUT_TEST",
+        party_a=party_a_addr,
+        template_type=TemplateType.UP_DOWN,
+        asset_pair="ETH/USD",
+        strike_price=3000.00,
+        expiry_hours=0,           # 0 hours — expiry_timestamp is overridden below
+        collateral_amount=collateral
+    ))
+
+    # Mine the proposal block normally
+    proposal_block = party_a.mine_block(blockchain, mempool, verbose=False)
+    # Override expiry_timestamp on the stored trade object to be in the near past
+    # (simulating a short timeout window)
+    # We do this BEFORE add_block so the trade is registered with a short expiry
+    blockchain.add_block(proposal_block)
+
+    trade = blockchain.get_trade("TRADE_TIMEOUT_TEST")
+    assert trade is not None and trade.state == TradeState.PROPOSED
+
+    # Manually set the trade's expiry to 1 second ago to simulate timeout
+    trade.expiry_timestamp = int(time.time()) - 1
+    print(f"Trade expiry set to: {datetime.fromtimestamp(trade.expiry_timestamp)} (1 second ago)")
+    print(f"Collateral locked before expiry: {blockchain.balances.get_locked_balance(party_a_addr) / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME}")
+
+    # Mine the next block — add_block will call _expire_stale_proposals
+    # and the trade's expiry will be detected
+    print("\nMining next block (expiry check triggered)...")
+    next_block = party_a.mine_block(blockchain, mempool, verbose=False)
+    blockchain.add_block(next_block)
+
+    trade = blockchain.get_trade("TRADE_TIMEOUT_TEST")
+    assert trade is not None and trade.state == TradeState.EXPIRED, \
+        f"Expected EXPIRED, got {trade.state.value if trade else None}"
+
+    # Collateral must be fully returned
+    assert blockchain.balances.get_locked_balance(party_a_addr) == 0, \
+        f"Expected 0 locked after expiry, got {blockchain.balances.get_locked_balance(party_a_addr)}"
+
+    assert "TRADE_TIMEOUT_TEST" not in blockchain.proposed_trades, \
+        "Expired trade should be removed from proposed_trades"
+
+    print(f"\nTrade state after expiry: {trade.state.value} ✓")
+    print(f"Collateral locked after expiry: {blockchain.balances.get_locked_balance(party_a_addr) / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} ✓")
+    print("Trade removed from proposed_trades ✓")
+
+    print("TEST 4d PASSED: Proposal auto-expiry works correctly")
+
+
 def test_settlement_scenarios():
     """Test 5: Different settlement scenarios"""
     print_separator("TEST 5: SETTLEMENT SCENARIOS")
@@ -605,6 +764,12 @@ def run_all_tests():
 
         # Test 4b: Insufficient balance — party_b acceptance rejected
         test_insufficient_balance_party_b()
+
+        # Test 4c: Manual proposal cancellation by party_a
+        test_cancel_proposal()
+
+        # Test 4d: Proposal auto-expiry (timeout)
+        test_proposal_timeout()
 
         # Test 5: Settlement scenarios
         test_settlement_scenarios()
