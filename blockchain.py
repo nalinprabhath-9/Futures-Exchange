@@ -13,6 +13,17 @@ MILLI_DENOMINATION = 1000
 MAX_TXNS_PER_BLOCK = 10
 COINBASE_REWARD = 50000
 
+MINIMUM_FEES = {
+    TransactionType.PROPOSE_TRADE: 1000,      # 1 FutureCoin
+    TransactionType.ACCEPT_TRADE: 1000,       # 1 FutureCoin
+    TransactionType.SETTLE_TRADE: 500,        # 0.5 FutureCoin
+    TransactionType.CANCEL_PROPOSAL: 250,     # 0.25 FutureCoin
+    TransactionType.CANCEL_TRADE: 500,        # 0.5 FutureCoin
+    TransactionType.TRANSFER: 100,            # 0.1 FutureCoin (for regular transfers)
+}
+
+HIGH_PRIORITY_MULTIPLIER = 2
+
 
 class Output:
     """
@@ -49,7 +60,8 @@ class Transaction:
 
     def __init__(self, version_number: int = 1,
                  list_of_inputs: List[str] = None,
-                 list_of_outputs=None):
+                 list_of_outputs=None,
+                 fee: int = 0):
         """
         Initialize a transaction
 
@@ -57,18 +69,20 @@ class Transaction:
             version_number: Transaction version (default 1)
             list_of_inputs: List of input strings
             list_of_outputs: List of output strings OR Output objects
+            fee: Transaction fee in milli-coins
         """
         self.VersionNumber = version_number
         self.ListOfInputs = list_of_inputs if list_of_inputs else []
         self.ListOfOutputs = list_of_outputs if list_of_outputs else []
         self.InCounter = len(self.ListOfInputs)
         self.OutCounter = len(self.ListOfOutputs)
+        self.fee = fee
         self.TransactionHash = self._calculate_hash()
 
     def _calculate_hash(self) -> str:
         """
         Calculate the transaction hash using double SHA-256
-        Hashes: VersionNumber + InCounter + ListOfInputs + OutCounter + ListOfOutputs
+        Hashes: VersionNumber + InCounter + ListOfInputs + OutCounter + ListOfOutputs + Fee
         """
         if self.ListOfOutputs and isinstance(self.ListOfOutputs[0], Output):
             outputs_str = ''.join([out.to_string() for out in self.ListOfOutputs])
@@ -80,7 +94,8 @@ class Transaction:
             str(self.InCounter) +
             ''.join(self.ListOfInputs) +
             str(self.OutCounter) +
-            outputs_str
+            outputs_str +
+            str(self.fee)
         )
 
         first_hash = hashlib.sha256(tx_data.encode()).digest()
@@ -423,33 +438,77 @@ class Blockchain:
     def add_block(self, block: Block):
         """
         Add a block to the blockchain and process all transactions.
-
-        Coinbase transactions are processed last so that the mining reward
-        cannot be used to satisfy collateral checks for futures transactions
-        in the same block. This mirrors Bitcoin's coinbase maturity rule:
-        block rewards are not spendable until they have sufficient confirmations.
+        Collects fees and awards them to the miner.
         """
         height = len(self.chain)
         self.chain.append(block)
         self.block_height_index[height] = block
         self.block_hash_index[block.Blockhash] = block
 
+        # Track fees collected in this block
+        total_fees_collected = 0
+        miner_address = None
+
+        # First, find miner address from coinbase transaction
+        for tx_hash, tx in block.Transactions.items():
+            if len(tx.ListOfInputs) > 0 and "Coinbase" in tx.ListOfInputs[0]:
+                if tx.ListOfOutputs and isinstance(tx.ListOfOutputs[0], Output):
+                    miner_address = tx.ListOfOutputs[0].Script
+                    break
+
+        # Process all transactions (except coinbase, which is processed last)
         coinbase_txs = []
         for tx_hash, tx in block.Transactions.items():
             self.transaction_index[tx_hash] = (block, tx)
+
             if len(tx.ListOfInputs) > 0 and "Coinbase" in tx.ListOfInputs[0]:
                 coinbase_txs.append(tx)
-            else:
-                self._process_transaction(tx)
+                continue
 
-        # Credit mining rewards only after all other transactions have been validated
+            # Collect fee from non-coinbase transactions
+            fee = getattr(tx, 'fee', 0)
+            if fee > 0:
+                fee_payer = None
+                if isinstance(tx, FuturesTransaction):
+                    if tx.tx_type == TransactionType.PROPOSE_TRADE:
+                        fee_payer = tx.party_a
+                    elif tx.tx_type == TransactionType.ACCEPT_TRADE:
+                        fee_payer = tx.party_b
+                    elif tx.tx_type == TransactionType.CANCEL_PROPOSAL:
+                        fee_payer = tx.party_a
+                        if fee_payer is None and tx.trade_id in self.proposed_trades:
+                            fee_payer = self.proposed_trades[tx.trade_id].party_a
+                    elif tx.tx_type == TransactionType.CANCEL_TRADE:
+                        fee_payer = tx.party_a
+                        if fee_payer is None and tx.trade_id in self.active_trades:
+                            fee_payer = self.active_trades[tx.trade_id].party_a
+                    elif tx.tx_type == TransactionType.SETTLE_TRADE:
+                        fee_payer = tx.party_a or tx.winner
+
+                if fee_payer:
+                    if self.balances.get_available_balance(fee_payer) >= fee:
+                        self.balances.balances[fee_payer] -= fee
+                        total_fees_collected += fee
+                        print(f"  Collected fee: {fee / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} from {fee_payer[:20]}...")
+                    else:
+                        print(f"  WARNING: Insufficient balance for fee from {fee_payer[:20]}... (skipping transaction)")
+                        continue
+
+            self._process_transaction(tx)
+
+        # Process coinbase transactions last (after fee collection)
         for tx in coinbase_txs:
             self._process_transaction(tx)
 
-        # Expire any proposals that timed out relative to this block's timestamp
+        # Award collected fees to miner
+        if miner_address and total_fees_collected > 0:
+            self.balances.balances[miner_address] = self.balances.balances.get(miner_address, 0) + total_fees_collected
+            print(f"  Miner {miner_address[:20]}... earned {total_fees_collected / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} in fees")
+
+        # Expire stale proposals
         self._expire_stale_proposals(block.BlockHeader.Timestamp)
 
-        print(f"Block #{height} added to blockchain")
+        print(f"Block #{height} added to blockchain (Total fees: {total_fees_collected / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME})")
 
     def _process_transaction(self, tx: Transaction):
         """
@@ -476,7 +535,7 @@ class Blockchain:
                 return
 
             self.proposed_trades[tx.trade_id] = tx
-            print(f"Trade {tx.trade_id} proposed by {tx.party_a[:20]}... (collateral locked)")
+            print(f"Trade {tx.trade_id} proposed by {tx.party_a[:20]}... (collateral locked, fee paid)")
 
         elif tx.tx_type == TransactionType.ACCEPT_TRADE:
             if tx.trade_id not in self.proposed_trades:
@@ -497,7 +556,7 @@ class Blockchain:
             trade.state = TradeState.ACTIVE
             self.active_trades[tx.trade_id] = trade
             del self.proposed_trades[tx.trade_id]
-            print(f"Trade {tx.trade_id} accepted by {tx.party_b[:20]}... — now ACTIVE")
+            print(f"Trade {tx.trade_id} accepted by {tx.party_b[:20]}... — now ACTIVE (fee paid)")
 
         elif tx.tx_type == TransactionType.CANCEL_PROPOSAL:
             # party_a voluntarily withdraws a PROPOSED (not yet accepted) trade
@@ -634,28 +693,60 @@ class Blockchain:
 
 class TxnMemoryPool:
     """
-    Transaction Memory Pool (Mempool)
-    Stores pending transactions before they are added to blocks
+    Transaction Memory Pool (Mempool) with fee-based prioritization.
+    High-fee transactions are selected before normal-fee transactions.
     """
 
     def __init__(self):
-        """Initialize an empty memory pool"""
-        self.transactions = []
+        """Initialize mempool with priority queues"""
+        self.high_priority_txs = []    # fee >= HIGH_PRIORITY_MULTIPLIER * minimum
+        self.normal_priority_txs = []  # fee >= minimum but below high-priority threshold
+
+    @property
+    def transactions(self) -> List[Transaction]:
+        """Compatibility view of all queued transactions (high first)."""
+        return self.high_priority_txs + self.normal_priority_txs
 
     def add_transaction(self, transaction: Transaction):
-        """Add a transaction to the memory pool, verifying signature if present"""
+        """
+        Add a transaction to mempool with fee-based priority.
+        Returns:
+            True if added, False if rejected.
+        """
         if hasattr(transaction, 'signature') and hasattr(transaction, 'pubkey'):
             if transaction.signature and transaction.pubkey:
                 if not verify_signature(transaction.pubkey, transaction.get_signing_data(), transaction.signature):
                     print(f"Rejected transaction {transaction.TransactionHash[:16]}...: invalid signature!")
-                    return
-        self.transactions.append(transaction)
-        print(f"Added transaction {transaction.TransactionHash[:16]}... to mempool (size: {len(self.transactions)})")
+                    return False
+
+        fee = getattr(transaction, 'fee', 0)
+        if isinstance(transaction, FuturesTransaction):
+            min_fee = MINIMUM_FEES.get(transaction.tx_type, 500)
+        else:
+            min_fee = MINIMUM_FEES.get(TransactionType.TRANSFER, 100)
+
+        if fee < min_fee:
+            print(f"Rejected transaction {transaction.TransactionHash[:16]}...: fee {fee} below minimum {min_fee}")
+            return False
+
+        if fee >= min_fee * HIGH_PRIORITY_MULTIPLIER:
+            self.high_priority_txs.append(transaction)
+            priority = "HIGH"
+        else:
+            self.normal_priority_txs.append(transaction)
+            priority = "NORMAL"
+
+        print(
+            f"Added transaction {transaction.TransactionHash[:16]}... to mempool "
+            f"[{priority} priority, fee: {fee / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME}] "
+            f"(size: {self.size()})"
+        )
+        return True
 
     def get_transactions(self, count: int) -> List[Transaction]:
         """
-        Get up to 'count' transactions from the mempool.
-        Removes them from the pool (simulating adding to block).
+        Get up to 'count' transactions from mempool.
+        High-priority transactions are selected first, then normal priority.
 
         Args:
             count: Maximum number of transactions to retrieve
@@ -663,17 +754,30 @@ class TxnMemoryPool:
         Returns:
             List of transactions (up to count)
         """
-        result = self.transactions[:count]
-        self.transactions = self.transactions[count:]
+        result = []
+        while self.high_priority_txs and len(result) < count:
+            result.append(self.high_priority_txs.pop(0))
+        while self.normal_priority_txs and len(result) < count:
+            result.append(self.normal_priority_txs.pop(0))
+
+        if result:
+            high_count = sum(
+                1 for tx in result
+                if getattr(tx, 'fee', 0) >= MINIMUM_FEES.get(
+                    tx.tx_type if isinstance(tx, FuturesTransaction) else TransactionType.TRANSFER, 100
+                ) * HIGH_PRIORITY_MULTIPLIER
+            )
+            print(f"Mempool: Selected {len(result)} transactions ({high_count} high-priority, {len(result) - high_count} normal)")
         return result
 
     def size(self) -> int:
-        """Return the number of transactions in the mempool"""
-        return len(self.transactions)
+        """Return total number of transactions in mempool"""
+        return len(self.high_priority_txs) + len(self.normal_priority_txs)
 
     def clear(self):
         """Clear all transactions from the mempool"""
-        self.transactions = []
+        self.high_priority_txs = []
+        self.normal_priority_txs = []
 
 
 class Miner:
@@ -842,17 +946,7 @@ def generate_random_transaction() -> Transaction:
 
 class FuturesTransaction(Transaction):
     """
-    Futures trade transaction.
-
-    Collateral lifecycle:
-      - PROPOSE_TRADE:  party_a's collateral is locked immediately.
-      - ACCEPT_TRADE:   party_b's collateral is locked; trade moves directly to ACTIVE.
-      - SETTLE_TRADE:   both locks released, winner receives loser's collateral.
-      - CANCEL_TRADE:   any locked collateral is returned to its owner(s).
-
-    The DEPOSIT_COLLATERAL transaction type and ACCEPTED state are no longer used.
-    Proposals that are not accepted within the blockchain's `proposal_timeout_seconds`
-    are automatically moved to EXPIRED by `_expire_stale_proposals` on each new block.
+    Futures trade transaction with fee support.
     """
 
     def __init__(self,
@@ -870,6 +964,7 @@ class FuturesTransaction(Transaction):
                  winner: str = None,
                  winner_payout: int = None,
                  loser_payout: int = None,
+                 fee: int = None,
                  signature: bytes = None,
                  pubkey: bytes = None):
         """
@@ -892,6 +987,7 @@ class FuturesTransaction(Transaction):
             loser_payout: Amount loser receives (usually 0)
             signature: ECDSA signature (bytes)
             pubkey: Compressed public key (bytes)
+            fee: Transaction fee in milli-coins. If None, uses minimum for tx_type.
         """
         self.trade_id = trade_id
         self.tx_type = tx_type
@@ -910,11 +1006,23 @@ class FuturesTransaction(Transaction):
         self.timestamp = int(time.time())
         self.signature = signature
         self.pubkey = pubkey
+        
+        if fee is None:
+            fee = MINIMUM_FEES.get(tx_type, 500)
+        else:
+            min_fee = MINIMUM_FEES.get(tx_type, 0)
+            if fee < min_fee:
+                raise ValueError(
+                    f"Fee {fee} ({fee/MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME}) "
+                    f"below minimum {min_fee} ({min_fee/MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME}) "
+                    f"for {tx_type.value}"
+                )
 
         super().__init__(
             version_number=2,
             list_of_inputs=[self._serialize_to_input()],
-            list_of_outputs=[self._serialize_to_output()]
+            list_of_outputs=[self._serialize_to_output()],
+            fee=fee
         )
 
     def _serialize_to_input(self) -> str:
@@ -955,6 +1063,7 @@ class FuturesTransaction(Transaction):
             str(self.winner or '') +
             str(self.winner_payout or 0) +
             str(self.loser_payout or 0) +
+            str(self.fee or 0) +
             str(self.timestamp)
         )
         return data.encode('utf-8')
@@ -977,6 +1086,7 @@ class FuturesTransaction(Transaction):
             'winner': self.winner,
             'winner_payout': self.winner_payout,
             'loser_payout': self.loser_payout,
+            'fee': self.fee,
             'timestamp': self.timestamp
         }
 
@@ -988,6 +1098,7 @@ class FuturesTransaction(Transaction):
         print(f"Transaction Hash: {self.TransactionHash}")
         print(f"Trade ID: {self.trade_id}")
         print(f"State: {self.state.value}")
+        print(f"Fee: {self.fee / MILLI_DENOMINATION:.3f} {CRYPTOCURRENCY_NAME}")
         print(f"Party A: {self.party_a[:20] if self.party_a else 'N/A'}...")
         print(f"Party B: {self.party_b[:20] if self.party_b else 'N/A'}...")
 
@@ -1025,12 +1136,18 @@ def create_propose_trade_transaction(trade_id: str,
                                      strike_price: float,
                                      expiry_hours: int,
                                      collateral_amount: int,
+                                     fee: int = None,
+                                     high_priority: bool = False,
                                      privkey_hex: str = None) -> FuturesTransaction:
     """
     Create a trade proposal transaction.
     Party A's collateral will be locked when this tx is processed.
     """
     expiry_timestamp = int(time.time()) + (expiry_hours * 3600)
+    if fee is None:
+        min_fee = MINIMUM_FEES[TransactionType.PROPOSE_TRADE]
+        fee = min_fee * HIGH_PRIORITY_MULTIPLIER if high_priority else min_fee
+
     tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.PROPOSE_TRADE,
@@ -1040,7 +1157,8 @@ def create_propose_trade_transaction(trade_id: str,
         strike_price=strike_price,
         expiry_timestamp=expiry_timestamp,
         collateral_amount=collateral_amount,
-        state=TradeState.PROPOSED
+        state=TradeState.PROPOSED,
+        fee=fee
     )
     if privkey_hex:
         sk = get_signing_key_from_hex(privkey_hex)
@@ -1051,17 +1169,24 @@ def create_propose_trade_transaction(trade_id: str,
 
 def create_accept_trade_transaction(trade_id: str,
                                     party_b: str,
+                                    fee: int = None,
+                                    high_priority: bool = False,
                                     privkey_hex: str = None) -> FuturesTransaction:
     """
     Create a trade acceptance transaction.
     Party B's collateral will be locked when this tx is processed,
     and the trade transitions directly to ACTIVE.
     """
+    if fee is None:
+        min_fee = MINIMUM_FEES[TransactionType.ACCEPT_TRADE]
+        fee = min_fee * HIGH_PRIORITY_MULTIPLIER if high_priority else min_fee
+
     tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.ACCEPT_TRADE,
         party_b=party_b,
-        state=TradeState.ACTIVE   # skips ACCEPTED; goes straight to ACTIVE
+        state=TradeState.ACTIVE,   # skips ACCEPTED; goes straight to ACTIVE
+        fee=fee
     )
     if privkey_hex:
         sk = get_signing_key_from_hex(privkey_hex)
@@ -1071,6 +1196,8 @@ def create_accept_trade_transaction(trade_id: str,
 
 
 def create_cancel_proposal_transaction(trade_id: str,
+                                       fee: int = None,
+                                       high_priority: bool = False,
                                        privkey_hex: str = None) -> 'FuturesTransaction':
     """
     Create a transaction that cancels a PROPOSED (not yet accepted) trade.
@@ -1086,10 +1213,15 @@ def create_cancel_proposal_transaction(trade_id: str,
     Returns:
         A signed or unsigned FuturesTransaction of type CANCEL_PROPOSAL
     """
+    if fee is None:
+        min_fee = MINIMUM_FEES[TransactionType.CANCEL_PROPOSAL]
+        fee = min_fee * HIGH_PRIORITY_MULTIPLIER if high_priority else min_fee
+
     tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.CANCEL_PROPOSAL,
-        state=TradeState.CANCELLED
+        state=TradeState.CANCELLED,
+        fee=fee
     )
     if privkey_hex:
         sk = get_signing_key_from_hex(privkey_hex)
@@ -1103,10 +1235,16 @@ def create_settle_trade_transaction(trade_id: str,
                                     winner: str,
                                     winner_payout: int,
                                     loser_payout: int = 0,
+                                    fee: int = None,
+                                    high_priority: bool = False,
                                     privkey_hex: str = None) -> FuturesTransaction:
     """
     Create a settlement transaction.
     """
+    if fee is None:
+        min_fee = MINIMUM_FEES[TransactionType.SETTLE_TRADE]
+        fee = min_fee * HIGH_PRIORITY_MULTIPLIER if high_priority else min_fee
+
     tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.SETTLE_TRADE,
@@ -1114,7 +1252,34 @@ def create_settle_trade_transaction(trade_id: str,
         winner=winner,
         winner_payout=winner_payout,
         loser_payout=loser_payout,
-        state=TradeState.SETTLED
+        state=TradeState.SETTLED,
+        fee=fee
+    )
+    if privkey_hex:
+        sk = get_signing_key_from_hex(privkey_hex)
+        tx.signature = sign_message(sk, tx.get_signing_data())
+        tx.pubkey = get_compressed_pubkey(sk.verifying_key)
+    return tx
+
+
+def create_cancel_trade_transaction(trade_id: str,
+                                    party_a: str,
+                                    fee: int = None,
+                                    high_priority: bool = False,
+                                    privkey_hex: str = None) -> FuturesTransaction:
+    """
+    Create a cancellation transaction for an ACTIVE trade.
+    """
+    if fee is None:
+        min_fee = MINIMUM_FEES[TransactionType.CANCEL_TRADE]
+        fee = min_fee * HIGH_PRIORITY_MULTIPLIER if high_priority else min_fee
+
+    tx = FuturesTransaction(
+        trade_id=trade_id,
+        tx_type=TransactionType.CANCEL_TRADE,
+        party_a=party_a,
+        state=TradeState.CANCELLED,
+        fee=fee
     )
     if privkey_hex:
         sk = get_signing_key_from_hex(privkey_hex)

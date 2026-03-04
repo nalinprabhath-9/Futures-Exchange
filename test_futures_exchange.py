@@ -5,18 +5,20 @@ Demonstrates mining, trading, and settlement workflows
 
 import time
 from datetime import datetime
+import pytest
 from blockchain import (
     Blockchain,
     Miner,
     TxnMemoryPool,
     CRYPTOCURRENCY_NAME,
     MILLI_DENOMINATION,
+    MINIMUM_FEES,
     create_propose_trade_transaction,
     create_accept_trade_transaction,
     create_cancel_proposal_transaction,
     create_settle_trade_transaction
 )
-from transaction_enums import TradeState, TemplateType
+from transaction_enums import TradeState, TemplateType, TransactionType
 
 
 def print_separator(title=""):
@@ -26,6 +28,43 @@ def print_separator(title=""):
         print(f"  {title}")
         print("="*80)
     print()
+
+
+@pytest.fixture
+def basic_context():
+    """
+    Pytest fixture providing a freshly initialized chain + mempool + two funded miners.
+    Mirrors the setup used by test_basic_mining, but without invoking test functions.
+    """
+    blockchain = Blockchain()
+    mempool = TxnMemoryPool()
+    alice = Miner(miner_address="Alice_0x1234abcd", difficulty_bits=0x207fffff)
+    bob = Miner(miner_address="Bob_0x5678efgh", difficulty_bits=0x207fffff)
+
+    # Fund both miners with one block reward each.
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    blockchain.add_block(bob.mine_block(blockchain, mempool, verbose=False))
+    return blockchain, mempool, alice, bob
+
+
+@pytest.fixture(name="blockchain")
+def fixture_blockchain(basic_context):
+    return basic_context[0]
+
+
+@pytest.fixture(name="mempool")
+def fixture_mempool(basic_context):
+    return basic_context[1]
+
+
+@pytest.fixture(name="alice")
+def fixture_alice(basic_context):
+    return basic_context[2]
+
+
+@pytest.fixture(name="bob")
+def fixture_bob(basic_context):
+    return basic_context[3]
 
 
 def test_basic_mining():
@@ -108,17 +147,19 @@ def test_simple_futures_trade(blockchain, mempool, alice, bob):
     assert trade.state == TradeState.ACTIVE, f"Expected ACTIVE, got {trade.state.value}"
     print(f"\nTrade state after block: {trade.state.value} ✓")
     
-    # Check balances after locking
-    # At this point: Alice has 50k (block_0) + 50k (block_2 coinbase) = 100k total, 10k locked
-    #                Bob has   50k (block_1)                           =  50k total, 10k locked
+    # Check balances after locking (fee-aware):
+    # At this point:
+    #   Alice total = 50k (block_0) + 50k (block_2 coinbase) - 1k (proposal fee) + 2k (miner collected fees) = 101k
+    #   Bob   total = 50k (block_1) - 1k (accept fee) = 49k
+    #   Both have 10k locked collateral
     print("\n--- BALANCES AFTER COLLATERAL LOCK ---")
     blockchain.balances.print_balance(alice_addr)
     blockchain.balances.print_balance(bob_addr)
     
     assert blockchain.balances.get_locked_balance(alice_addr) == 10000
     assert blockchain.balances.get_locked_balance(bob_addr) == 10000
-    assert blockchain.balances.get_available_balance(alice_addr) == 90000  # 100k total - 10k locked
-    assert blockchain.balances.get_available_balance(bob_addr) == 40000   # 50k total - 10k locked
+    assert blockchain.balances.get_available_balance(alice_addr) == 91000  # 101k total - 10k locked
+    assert blockchain.balances.get_available_balance(bob_addr) == 39000    # 49k total - 10k locked
     
     # Step 3: Simulate expiry and settlement (Alice wins)
     print("\nSTEP 3: Trade expires — Oracle reports BTC went UP to $52,000")
@@ -138,9 +179,9 @@ def test_simple_futures_trade(blockchain, mempool, alice, bob):
     block_3 = bob.mine_block(blockchain, mempool, verbose=False)
     blockchain.add_block(block_3)
     
-    # Final balances
-    # Alice: 50k (block_0) + 50k (block_2) + 10k (won from Bob) = 110k
-    # Bob:   50k (block_1) + 50k (block_3) - 10k (lost to Alice) = 90k
+    # Final balances (fee-aware):
+    # Alice: 101k (after block_2) - 0.5k (settlement fee) + 10k (wins from Bob) = 110.5k
+    # Bob:   49k  (after block_2) - 10k (loses to Alice) + 50k (block_3 coinbase) + 0.5k (miner fees) = 89.5k
     print("\n--- FINAL BALANCES ---")
     blockchain.balances.print_balance(alice_addr)
     blockchain.balances.print_balance(bob_addr)
@@ -148,8 +189,8 @@ def test_simple_futures_trade(blockchain, mempool, alice, bob):
     alice_total = blockchain.balances.get_total_balance(alice_addr)
     bob_total = blockchain.balances.get_total_balance(bob_addr)
     
-    assert alice_total == 110000, f"Alice should have 110k, has {alice_total}"
-    assert bob_total == 90000, f"Bob should have 90k, has {bob_total}"
+    assert alice_total == 110500, f"Alice should have 110.5k, has {alice_total}"
+    assert bob_total == 89500, f"Bob should have 89.5k, has {bob_total}"
     
     print("TEST 2 PASSED: Simple futures trade completed successfully")
     return blockchain, mempool
@@ -245,13 +286,13 @@ def test_multiple_trades(blockchain, mempool, alice, bob):
 
 def test_insufficient_balance(blockchain, mempool, alice, bob):
     """
-    Test 4: Handle insufficient balance for collateral.
+    Test 4: Handle insufficient balance for collateral (Party A).
 
     Under the new model the balance check happens at propose/accept time.
     A propose with insufficient funds is rejected immediately when the block
     is processed — the trade is never registered as active.
     """
-    print_separator("TEST 4: INSUFFICIENT BALANCE HANDLING")
+    print_separator("TEST 4: INSUFFICIENT BALANCE HANDLING (PARTY A)")
     
     alice_addr = alice.miner_address
     bob_addr = bob.miner_address
@@ -288,7 +329,7 @@ def test_insufficient_balance(blockchain, mempool, alice, bob):
 
 def test_insufficient_balance_party_b():
     """
-    Test 4b: Party B attempts to accept a trade without enough collateral.
+    Test 5: Party B attempts to accept a trade without enough collateral.
 
     The proposal succeeds and party_a's collateral is locked. When party_b's
     ACCEPT_TRADE tx is processed, the balance check fails, so:
@@ -296,7 +337,7 @@ def test_insufficient_balance_party_b():
       - the trade remains in PROPOSED state (never reaches ACTIVE)
       - party_a's collateral lock is still in place (pending a future accept or cancel)
     """
-    print_separator("TEST 4b: PARTY B INSUFFICIENT BALANCE ON ACCEPTANCE")
+    print_separator("TEST 5: PARTY B INSUFFICIENT BALANCE ON ACCEPTANCE")
 
     blockchain = Blockchain()
     mempool = TxnMemoryPool()
@@ -367,20 +408,20 @@ def test_insufficient_balance_party_b():
     print(f"Proposer locked:      {proposer_locked / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} ✓")
     print(f"BrokeAcceptor locked: {acceptor_locked / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} ✓")
 
-    print("TEST 4b PASSED: Party B insufficient balance handled correctly at acceptance time")
+    print("TEST 5 PASSED: Party B insufficient balance handled correctly at acceptance time")
 
 
 
 def test_cancel_proposal():
     """
-    Test 4c: Party A manually cancels a PROPOSED trade before anyone accepts.
+    Test 6: Party A manually cancels a PROPOSED trade before anyone accepts.
 
     Expected outcomes:
       - Trade moves to CANCELLED and is stored in settled_trades
       - Party A's locked collateral is returned in full
       - The trade is no longer visible in proposed_trades
     """
-    print_separator("TEST 4c: MANUAL PROPOSAL CANCELLATION BY PARTY A")
+    print_separator("TEST 6: MANUAL PROPOSAL CANCELLATION BY PARTY A")
 
     blockchain = Blockchain()
     mempool = TxnMemoryPool()
@@ -443,12 +484,12 @@ def test_cancel_proposal():
         "Cancelled trade should be removed from proposed_trades"
     print("Trade removed from proposed_trades ✓")
 
-    print("TEST 4c PASSED: Proposal cancellation by party_a works correctly")
+    print("TEST 6 PASSED: Proposal cancellation by party_a works correctly")
 
 
 def test_proposal_timeout():
     """
-    Test 4d: A PROPOSED trade that is not accepted within proposal_timeout_seconds
+    Test 7: A PROPOSED trade that is not accepted within proposal_timeout_seconds
     is automatically expired when the next block is processed.
 
     The blockchain is configured with a very short timeout (1 second) so the
@@ -460,7 +501,7 @@ def test_proposal_timeout():
       - Party A's collateral is returned
       - Trade is removed from proposed_trades
     """
-    print_separator("TEST 4d: PROPOSAL TIMEOUT / AUTO-EXPIRY")
+    print_separator("TEST 7: PROPOSAL TIMEOUT / AUTO-EXPIRY")
 
     # 5-second timeout so we can trigger it by advancing the block timestamp
     timeout = 5
@@ -523,12 +564,68 @@ def test_proposal_timeout():
     print(f"Collateral locked after expiry: {blockchain.balances.get_locked_balance(party_a_addr) / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} ✓")
     print("Trade removed from proposed_trades ✓")
 
-    print("TEST 4d PASSED: Proposal auto-expiry works correctly")
+    print("TEST 7 PASSED: Proposal auto-expiry works correctly")
+
+
+def test_fee_collection_and_miner_rewards():
+    """
+    Test 8: Fees are deducted from transaction initiators and awarded to miners.
+    """
+    print_separator("TEST 8: FEE COLLECTION AND MINER REWARD")
+
+    blockchain = Blockchain()
+    mempool = TxnMemoryPool()
+
+    alice = Miner(miner_address="Alice_fee_addr", difficulty_bits=0x207fffff)
+    bob = Miner(miner_address="Bob_fee_addr", difficulty_bits=0x207fffff)
+
+    # Give Alice initial balance so she can propose and pay fees.
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    assert blockchain.balances.get_total_balance(alice.miner_address) == 50000
+
+    propose_fee = MINIMUM_FEES[TransactionType.PROPOSE_TRADE]
+    accept_fee = MINIMUM_FEES[TransactionType.ACCEPT_TRADE]
+    collateral = 10000
+
+    # Alice proposes (Alice pays fee, Bob should receive fee when he mines this block).
+    mempool.add_transaction(create_propose_trade_transaction(
+        trade_id="TRADE_FEES_001",
+        party_a=alice.miner_address,
+        template_type=TemplateType.UP_DOWN,
+        asset_pair="BTC/USD",
+        strike_price=50000.00,
+        expiry_hours=1,
+        collateral_amount=collateral,
+        fee=propose_fee
+    ))
+    blockchain.add_block(bob.mine_block(blockchain, mempool, verbose=False))
+
+    trade = blockchain.get_trade("TRADE_FEES_001")
+    assert trade is not None and trade.state == TradeState.PROPOSED
+    assert blockchain.balances.get_total_balance(alice.miner_address) == 50000 - propose_fee
+    assert blockchain.balances.get_locked_balance(alice.miner_address) == collateral
+    assert blockchain.balances.get_total_balance(bob.miner_address) == 50000 + propose_fee
+
+    # Bob accepts (Bob pays fee, Alice should receive fee when she mines this block).
+    mempool.add_transaction(create_accept_trade_transaction(
+        trade_id="TRADE_FEES_001",
+        party_b=bob.miner_address,
+        fee=accept_fee
+    ))
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+
+    trade = blockchain.get_trade("TRADE_FEES_001")
+    assert trade is not None and trade.state == TradeState.ACTIVE
+    assert blockchain.balances.get_locked_balance(bob.miner_address) == collateral
+    assert blockchain.balances.get_total_balance(bob.miner_address) == (50000 + propose_fee) - accept_fee
+    assert blockchain.balances.get_total_balance(alice.miner_address) == (50000 - propose_fee) + 50000 + accept_fee
+
+    print("TEST 8 PASSED: Fees are correctly charged and paid to miners")
 
 
 def test_settlement_scenarios():
-    """Test 5: Different settlement scenarios"""
-    print_separator("TEST 5: SETTLEMENT SCENARIOS")
+    """Test 9: Different settlement scenarios"""
+    print_separator("TEST 9: SETTLEMENT SCENARIOS")
     
     # Fresh blockchain for clean test
     blockchain = Blockchain()
@@ -588,12 +685,12 @@ def test_settlement_scenarios():
     assert settled_trade.winner == trader_a.miner_address
     assert settled_trade.settlement_price == 55000.00
     
-    print("TEST 5 PASSED: Settlement scenarios work correctly")
+    print("TEST 9 PASSED: Settlement scenarios work correctly")
 
 
 def test_blockchain_state():
-    """Test 6: Blockchain state tracking"""
-    print_separator("TEST 6: BLOCKCHAIN STATE TRACKING")
+    """Test 10: Blockchain state tracking"""
+    print_separator("TEST 10: BLOCKCHAIN STATE TRACKING")
     
     blockchain = Blockchain()
     mempool = TxnMemoryPool()
@@ -630,12 +727,12 @@ def test_blockchain_state():
         assert current_block.BlockHeader.hashPrevBlock == previous_block.Blockhash
         print(f"  Block {i} links correctly to Block {i-1} ✓")
     
-    print("TEST 6 PASSED: Blockchain state tracking works correctly")
+    print("TEST 10 PASSED: Blockchain state tracking works correctly")
 
 
 def test_complete_workflow():
-    """Test 7: Complete end-to-end workflow"""
-    print_separator("TEST 7: COMPLETE END-TO-END WORKFLOW")
+    """Test 11: Complete end-to-end workflow"""
+    print_separator("TEST 11: COMPLETE END-TO-END WORKFLOW")
     
     print("Initializing blockchain and participants...")
     blockchain = Blockchain()
@@ -738,7 +835,7 @@ def test_complete_workflow():
         total = blockchain.balances.get_total_balance(miner.miner_address)
         print(f"  {name}: {total / MILLI_DENOMINATION:.1f} {CRYPTOCURRENCY_NAME}")
     
-    print("\nTEST 7 PASSED: Complete workflow executed successfully")
+    print("\nTEST 11 PASSED: Complete workflow executed successfully")
 
 
 def run_all_tests():
@@ -762,22 +859,25 @@ def run_all_tests():
         # Test 4: Insufficient balance — party_a proposal rejected
         test_insufficient_balance(blockchain, mempool, alice, bob)
 
-        # Test 4b: Insufficient balance — party_b acceptance rejected
+        # Test 5: Insufficient balance — party_b acceptance rejected
         test_insufficient_balance_party_b()
 
-        # Test 4c: Manual proposal cancellation by party_a
+        # Test 6: Manual proposal cancellation by party_a
         test_cancel_proposal()
 
-        # Test 4d: Proposal auto-expiry (timeout)
+        # Test 7: Proposal auto-expiry (timeout)
         test_proposal_timeout()
 
-        # Test 5: Settlement scenarios
+        # Test 8: Fee deduction and miner rewards
+        test_fee_collection_and_miner_rewards()
+
+        # Test 9: Settlement scenarios
         test_settlement_scenarios()
         
-        # Test 6: Blockchain state
+        # Test 10: Blockchain state
         test_blockchain_state()
         
-        # Test 7: Complete workflow
+        # Test 11: Complete workflow
         test_complete_workflow()
         
         print("ALL TESTS PASSED!")
