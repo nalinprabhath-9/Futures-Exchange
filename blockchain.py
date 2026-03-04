@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 
 from transaction_enums import TransactionType, TradeState, TemplateType
-from crypto_utils import sign_message, get_signing_key_from_hex, get_compressed_pubkey, verify_signature
+from crypto_utils import sign_message, get_signing_key_from_hex, get_compressed_pubkey, verify_signature, verify_oracle_signature
 
 
 CRYPTOCURRENCY_NAME = "FutureCoin"
@@ -432,8 +432,13 @@ class Blockchain:
         self.proposal_timeout_seconds = proposal_timeout_seconds
         self.balances = BalanceManager()
 
+        # hardcoded
+        self.trusted_oracle_pubkey = "02755042abfad8bc9c08e5184360e43d32108c1aafd2324f946eec3bdfd4950553"
+
         print("Blockchain initialized (genesis block will be mined)")
         print(f"Futures trading enabled! Proposal timeout: {proposal_timeout_seconds}s")
+
+    
 
     def add_block(self, block: Block):
         """
@@ -572,26 +577,100 @@ class Blockchain:
             print(f"Trade {tx.trade_id} proposal cancelled by party_a, collateral unlocked")
 
         elif tx.tx_type == TransactionType.SETTLE_TRADE:
+            # Ensure trade exists and is active
             if tx.trade_id not in self.active_trades:
                 print(f"Trade {tx.trade_id} not found or already settled")
                 return
 
             trade = self.active_trades[tx.trade_id]
-            loser = trade.party_a if tx.winner == trade.party_b else trade.party_b
 
-            self.balances.settle_trade(
-                tx.trade_id,
-                tx.winner,
-                loser,
-                tx.winner_payout,
-                tx.loser_payout or 0
+            # Verify oracle pubkey matches trusted anchor
+            if tx.oracle_pubkey != self.trusted_oracle_pubkey:
+                print("Invalid oracle pubkey")
+                return
+
+            # Rebuild oracle message EXACTLY like oracle does
+            # Oracle format:
+            # SHA256( symbol || formatted_price || timestamp )
+
+            price_str = f"{tx.oracle_price:.8f}".rstrip("0").rstrip(".")
+            raw = (
+                trade.asset_pair.encode() +
+                price_str.encode() +
+                str(tx.oracle_timestamp).encode()
             )
 
+            digest = hashlib.sha256(raw).digest()
+
+            # Verify oracle signature (digest already hashed once)
+            if not verify_oracle_signature(
+                bytes.fromhex(tx.oracle_pubkey),
+                digest,
+                bytes.fromhex(tx.oracle_signature)
+            ):
+                print("Invalid oracle signature")
+                return
+
+            # Enforce expiry using TRADE expiry, not tx expiry
+            current_block_time = self.chain[-1].BlockHeader.Timestamp
+
+            if current_block_time < trade.expiry_timestamp:
+                print("Trade not yet expired")
+                return
+
+            # Optional: enforce oracle timestamp close to expiry
+            if abs(tx.oracle_timestamp - trade.expiry_timestamp) > 300:
+                print("Oracle timestamp too far from expiry")
+                return
+
+            # Compute winner deterministically (IGNORE tx.winner)
+            if tx.oracle_price > trade.strike_price:
+                winner = trade.party_a
+                loser = trade.party_b
+            else:
+                winner = trade.party_b
+                loser = trade.party_a
+
+            total_collateral = trade.collateral_amount * 2
+
+            # Perform settlement using balance manager
+            self.balances.settle_trade(
+                tx.trade_id,
+                winner,
+                loser,
+                total_collateral,
+                0
+            )
+
+            # Update trade state
             trade.state = TradeState.SETTLED
-            trade.settlement_price = tx.settlement_price
-            trade.winner = tx.winner
+            trade.settlement_price = tx.oracle_price
+            trade.winner = winner
+
             self.settled_trades[tx.trade_id] = trade
             del self.active_trades[tx.trade_id]
+
+            print(f"Trade {tx.trade_id} settled. Winner: {winner}")
+            # if tx.trade_id not in self.active_trades:
+            #     print(f"Trade {tx.trade_id} not found or already settled")
+            #     return
+
+            # trade = self.active_trades[tx.trade_id]
+            # loser = trade.party_a if tx.winner == trade.party_b else trade.party_b
+
+            # self.balances.settle_trade(
+            #     tx.trade_id,
+            #     tx.winner,
+            #     loser,
+            #     tx.winner_payout,
+            #     tx.loser_payout or 0
+            # )
+
+            # trade.state = TradeState.SETTLED
+            # trade.settlement_price = tx.settlement_price
+            # trade.winner = tx.winner
+            # self.settled_trades[tx.trade_id] = trade
+            # del self.active_trades[tx.trade_id]
 
         elif tx.tx_type == TransactionType.CANCEL_TRADE:
             if tx.trade_id not in self.active_trades:
@@ -966,7 +1045,11 @@ class FuturesTransaction(Transaction):
                  loser_payout: int = None,
                  fee: int = None,
                  signature: bytes = None,
-                 pubkey: bytes = None):
+                 pubkey: bytes = None,
+                 oracle_price: float = None,
+                 oracle_timestamp: int = None,
+                 oracle_signature: str = None,
+                 oracle_pubkey: str = None):
         """
         Initialize a futures transaction
 
@@ -1006,6 +1089,13 @@ class FuturesTransaction(Transaction):
         self.timestamp = int(time.time())
         self.signature = signature
         self.pubkey = pubkey
+        self.oracle_price = oracle_price
+        self.oracle_timestamp = oracle_timestamp
+        self.oracle_signature = oracle_signature
+        self.oracle_pubkey = oracle_pubkey
+
+        # hardcoded
+        self.trusted_oracle_pubkey = "02755042abfad8bc9c08e5184360e43d32108c1aafd2324f946eec3bdfd4950553"
         
         if fee is None:
             fee = MINIMUM_FEES.get(tx_type, 500)
@@ -1064,7 +1154,11 @@ class FuturesTransaction(Transaction):
             str(self.winner_payout or 0) +
             str(self.loser_payout or 0) +
             str(self.fee or 0) +
-            str(self.timestamp)
+            str(self.timestamp) +
+            str(self.oracle_price or 0) +
+            str(self.oracle_timestamp or 0) +
+            str(self.oracle_signature or '') +
+            str(self.oracle_pubkey or '')
         )
         return data.encode('utf-8')
 
@@ -1229,18 +1323,15 @@ def create_cancel_proposal_transaction(trade_id: str,
         tx.pubkey = get_compressed_pubkey(sk.verifying_key)
     return tx
 
-
 def create_settle_trade_transaction(trade_id: str,
-                                    settlement_price: float,
-                                    winner: str,
-                                    winner_payout: int,
-                                    loser_payout: int = 0,
+                                    oracle_price: float,
+                                    oracle_timestamp: int,
+                                    oracle_signature: str,
+                                    oracle_pubkey: str,
                                     fee: int = None,
                                     high_priority: bool = False,
                                     privkey_hex: str = None) -> FuturesTransaction:
-    """
-    Create a settlement transaction.
-    """
+
     if fee is None:
         min_fee = MINIMUM_FEES[TransactionType.SETTLE_TRADE]
         fee = min_fee * HIGH_PRIORITY_MULTIPLIER if high_priority else min_fee
@@ -1248,18 +1339,51 @@ def create_settle_trade_transaction(trade_id: str,
     tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.SETTLE_TRADE,
-        settlement_price=settlement_price,
-        winner=winner,
-        winner_payout=winner_payout,
-        loser_payout=loser_payout,
+        oracle_price=oracle_price,
+        oracle_timestamp=oracle_timestamp,
+        oracle_signature=oracle_signature,
+        oracle_pubkey=oracle_pubkey,
         state=TradeState.SETTLED,
         fee=fee
     )
+
     if privkey_hex:
         sk = get_signing_key_from_hex(privkey_hex)
         tx.signature = sign_message(sk, tx.get_signing_data())
         tx.pubkey = get_compressed_pubkey(sk.verifying_key)
+
     return tx
+
+# def create_settle_trade_transaction(trade_id: str,
+#                                     settlement_price: float,
+#                                     winner: str,
+#                                     winner_payout: int,
+#                                     loser_payout: int = 0,
+#                                     fee: int = None,
+#                                     high_priority: bool = False,
+#                                     privkey_hex: str = None) -> FuturesTransaction:
+#     """
+#     Create a settlement transaction.
+#     """
+#     if fee is None:
+#         min_fee = MINIMUM_FEES[TransactionType.SETTLE_TRADE]
+#         fee = min_fee * HIGH_PRIORITY_MULTIPLIER if high_priority else min_fee
+
+#     tx = FuturesTransaction(
+#         trade_id=trade_id,
+#         tx_type=TransactionType.SETTLE_TRADE,
+#         settlement_price=settlement_price,
+#         winner=winner,
+#         winner_payout=winner_payout,
+#         loser_payout=loser_payout,
+#         state=TradeState.SETTLED,
+#         fee=fee
+#     )
+#     if privkey_hex:
+#         sk = get_signing_key_from_hex(privkey_hex)
+#         tx.signature = sign_message(sk, tx.get_signing_data())
+#         tx.pubkey = get_compressed_pubkey(sk.verifying_key)
+#     return tx
 
 
 def create_cancel_trade_transaction(trade_id: str,

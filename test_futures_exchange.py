@@ -1,3 +1,4 @@
+
 """
 Comprehensive tests and examples for the FutureCoin Futures Exchange blockchain
 Demonstrates mining, trading, and settlement workflows
