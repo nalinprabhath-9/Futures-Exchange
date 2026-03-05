@@ -151,6 +151,7 @@ def main():
 
     txc = create_cancel_proposal_transaction(
         trade_id=trade_cancel,
+        party_a=A["address"],
         privkey_hex=A["privkey_hex"],
     )
     r = submit(N1, txc)

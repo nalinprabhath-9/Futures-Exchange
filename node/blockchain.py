@@ -1203,6 +1203,7 @@ def create_accept_trade_transaction(trade_id: str,
 
 
 def create_cancel_proposal_transaction(trade_id: str,
+                                       party_a: str = None,
                                        fee: int = None,
                                        high_priority: bool = False,
                                        privkey_hex: str = None) -> 'FuturesTransaction':
@@ -1215,6 +1216,7 @@ def create_cancel_proposal_transaction(trade_id: str,
 
     Args:
         trade_id: ID of the proposed trade to cancel
+        party_a: Address of the proposer (required for node identity verification)
         privkey_hex: Optional hex private key for signing
 
     Returns:
@@ -1227,6 +1229,7 @@ def create_cancel_proposal_transaction(trade_id: str,
     tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.CANCEL_PROPOSAL,
+        party_a=party_a,
         state=TradeState.CANCELLED,
         fee=fee
     )
