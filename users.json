@@ -1,25 +1,32 @@
-{
-  "users": [
-    {
-      "user_id": "alice",
-      "name": "Alice",
-      "address": "addr_261bacce6fe74cef",
-      "pubkey_b64": "eS9HOic/jZwyCywO4g4QFqNgmxkXy9Ifku/bnJmQ9ng=",
-      "balance": 2000
-    },
-    {
-      "user_id": "bob",
-      "name": "Bob",
-      "address": "addr_3fe114583d184bcb",
-      "pubkey_b64": "CZzSH2y76Ung/TWN8j6rfNer8oCe/SNyKk7lf+4e0Rw=",
-      "balance": 2000
-    },
-    {
-      "user_id": "carol",
-      "name": "Carol",
-      "address": "addr_6a1248e99786479c",
-      "pubkey_b64": "nKULkN3wL06uLLhNwBHZVaaKsWba8Q2/onModHzmtAQ=",
-      "balance": 2000
-    }
-  ]
-}
+[
+  {
+    "user_id": "user1",
+    "privkey_hex": "a58fc490a4737efed97d0673fd65d3073948eb0e1cc4d886ec4afd410e0cadbb",
+    "pubkey_hex": "03733edfe247c5db43d8f00a4d455bed62095d23982ac2c175172c8d5ed23214ef",
+    "address": "a4c82b8e3d625468e7f89c5c5d9039bf3c3bf47a"
+  },
+  {
+    "user_id": "user2",
+    "privkey_hex": "c1f8c3dfa5a998d6cd2f93e5aae95cb96a34884370797cb12a28e67701f34671",
+    "pubkey_hex": "03c94e7e2a46fde9d6130a9c27fbd25218099484c71bf738ebfe2e6749af18474f",
+    "address": "3562c1b81dd9da9cc43ebe60927d3e7b20170786"
+  },
+  {
+    "user_id": "user3",
+    "privkey_hex": "f72b2d739017abb16565b6a1bb88cee9278f82b45a786f71a68d182a961033d8",
+    "pubkey_hex": "02123ead891a88a6c408e0d4fc824485aee198a07ba89f6df611b56308e2e18393",
+    "address": "dcbf06d7d38e1c75c090a6e99436c1cfc306bd51"
+  },
+  {
+    "user_id": "user4",
+    "privkey_hex": "11eee6bbebd5f250f482c8a3e3d7eeec31219261482271c7e2407cda88b2bfd8",
+    "pubkey_hex": "038e8083bf916e30ad1b01d8041a4391bea3ba7be5668bf09965650b12aab9d04c",
+    "address": "004e1b6ab5a905d68157b25f2b7fe05f70b58c59"
+  },
+  {
+    "user_id": "user5",
+    "privkey_hex": "c225c3dec818c14b377247355ba9d39eb231553d8a2a020f23b9704c5f1b422c",
+    "pubkey_hex": "034b92a28ae06e77bea1c4cd1974ebd129d424afcbba2314322d7d14e25001df0f",
+    "address": "896ddede719dbcddf5c240f68d3dcf5961e3e616"
+  }
+]
