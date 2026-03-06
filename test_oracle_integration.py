@@ -247,10 +247,11 @@ def main():
         )
     )
     blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
-    print("Balances after trade cancellation:")
+    print("Balances after trade cancellation attempt:")
     print_balances(blockchain, alice, bob)
     cancelled_trade2 = blockchain.get_trade(trade_id_cancel2)
-    assert cancelled_trade2.state == TradeState.CANCELLED
+    assert cancelled_trade2.state == TradeState.ACTIVE
+    print("Trade cancellation after acceptance was correctly ignored.")
 
 
 if __name__ == "__main__":

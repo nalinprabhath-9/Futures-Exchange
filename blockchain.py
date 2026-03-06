@@ -653,35 +653,11 @@ class Blockchain:
             del self.active_trades[tx.trade_id]
 
             print(f"Trade {tx.trade_id} settled. Winner: {winner}")
-            # if tx.trade_id not in self.active_trades:
-            #     print(f"Trade {tx.trade_id} not found or already settled")
-            #     return
-
-            # trade = self.active_trades[tx.trade_id]
-            # loser = trade.party_a if tx.winner == trade.party_b else trade.party_b
-
-            # self.balances.settle_trade(
-            #     tx.trade_id,
-            #     tx.winner,
-            #     loser,
-            #     tx.winner_payout,
-            #     tx.loser_payout or 0
-            # )
-
-            # trade.state = TradeState.SETTLED
-            # trade.settlement_price = tx.settlement_price
-            # trade.winner = tx.winner
-            # self.settled_trades[tx.trade_id] = trade
-            # del self.active_trades[tx.trade_id]
 
         elif tx.tx_type == TransactionType.CANCEL_TRADE:
-            if tx.trade_id not in self.active_trades:
-                return
-            self.balances.cancel_trade(tx.trade_id)
-            trade = self.active_trades[tx.trade_id]
-            trade.state = TradeState.CANCELLED
-            self.settled_trades[tx.trade_id] = trade
-            del self.active_trades[tx.trade_id]
+            # Disallow cancellation after acceptance (ACTIVE or later)
+            print(f"Trade {tx.trade_id} cannot be cancelled after acceptance. Cancellation ignored.")
+            return
 
     def get_active_trades(self) -> List['FuturesTransaction']:
         """Get all active futures trades"""
