@@ -1,5 +1,6 @@
 import hashlib
 from ecdsa import SigningKey, VerifyingKey, SECP256k1, BadSignatureError
+import coincurve
 
 
 def sha256(data: bytes) -> bytes:
@@ -11,7 +12,21 @@ def get_signing_key_from_hex(priv_hex: str) -> SigningKey:
 
 
 def get_verifying_key_from_bytes(pub_bytes: bytes) -> VerifyingKey:
-    return VerifyingKey.from_string(pub_bytes, curve=SECP256k1)
+    """
+    Accepts a compressed (33-byte) or uncompressed (64/65-byte) secp256k1 public key.
+    Returns an ecdsa.VerifyingKey object.
+    """
+    if len(pub_bytes) == 33:
+        # Decompress using coincurve
+        pubkey = coincurve.PublicKey(pub_bytes)
+        uncompressed = pubkey.format(compressed=False)[1:]  # Remove 0x04 prefix
+        return VerifyingKey.from_string(uncompressed, curve=SECP256k1)
+    elif len(pub_bytes) == 64:
+        return VerifyingKey.from_string(pub_bytes, curve=SECP256k1)
+    elif len(pub_bytes) == 65 and pub_bytes[0] == 0x04:
+        return VerifyingKey.from_string(pub_bytes[1:], curve=SECP256k1)
+    else:
+        raise ValueError("Invalid public key length for secp256k1")
 
 
 def get_compressed_pubkey(vk: VerifyingKey) -> bytes:
@@ -35,13 +50,14 @@ def verify_signature(pubkey_bytes: bytes, message: bytes, signature: bytes) -> b
         return False
     
 def verify_oracle_signature(pubkey_bytes: bytes, digest: bytes, signature: bytes) -> bool:
-        try:
-            vk = get_verifying_key_from_bytes(pubkey_bytes)
-            return vk.verify_digest(signature, digest)
-        except BadSignatureError:
-            return False
-        except Exception:
-            return False
+    try:
+        # Use coincurve for direct secp256k1 signature verification (DER-encoded signature, compressed pubkey)
+        # This matches the oracle's signing and verification logic exactly.
+        pubkey = coincurve.PublicKey(pubkey_bytes)
+        # coincurve expects bytes, signature is DER, digest is 32 bytes
+        return pubkey.verify(signature, digest, hasher=None)
+    except Exception:
+        return False
 
 
 # def _build_message(symbol: str, price: float, timestamp: int) -> bytes:

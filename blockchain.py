@@ -613,12 +613,14 @@ class Blockchain:
 
             # Enforce expiry using TRADE expiry, not tx expiry
             current_block_time = self.chain[-1].BlockHeader.Timestamp
+            print(f"[DEBUG] SETTLE_TRADE: current_block_time={current_block_time}, trade.expiry_timestamp={trade.expiry_timestamp}, diff={current_block_time - trade.expiry_timestamp}")
 
             if current_block_time < trade.expiry_timestamp:
                 print("Trade not yet expired")
                 return
 
             # Optional: enforce oracle timestamp close to expiry
+            print(f"[DEBUG] SETTLE_TRADE: oracle_timestamp={tx.oracle_timestamp}, expiry_timestamp={trade.expiry_timestamp}, diff={tx.oracle_timestamp - trade.expiry_timestamp}")
             if abs(tx.oracle_timestamp - trade.expiry_timestamp) > 300:
                 print("Oracle timestamp too far from expiry")
                 return

@@ -81,7 +81,7 @@ def main():
             template_type=TemplateType.UP_DOWN,
             asset_pair="BTC",
             strike_price=strike_price,
-            expiry_hours=1,
+            expiry_hours=0.001,  # expire in ~3.6 seconds for fast testing
             collateral_amount=collateral,
         )
     )
@@ -99,6 +99,18 @@ def main():
     assert trade.state == TradeState.ACTIVE
     print("\nTrade ACTIVE ✓")
     print_balances(blockchain, alice, bob)
+
+    # Advance blockchain time past expiry before settlement
+    trade = blockchain.get_trade("ORACLE_TRADE_1")
+    # Sleep until after expiry (plus a small buffer)
+    if trade and hasattr(trade, 'expiry_timestamp'):
+        now = int(time.time())
+        wait = trade.expiry_timestamp - now + 1
+        if wait > 0:
+            print(f"Sleeping {wait} seconds to allow trade to expire...")
+            time.sleep(wait)
+        # Set the next block's timestamp to just after expiry
+        blockchain.chain[-1].BlockHeader.Timestamp = trade.expiry_timestamp + 1
 
     # ------------------------------------------------------------------
     # 3️⃣ Fetch real oracle price
