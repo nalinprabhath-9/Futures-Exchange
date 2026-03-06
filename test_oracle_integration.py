@@ -13,6 +13,8 @@ from blockchain import (
     create_propose_trade_transaction,
     create_accept_trade_transaction,
     create_settle_trade_transaction,
+    create_cancel_proposal_transaction,
+    create_cancel_trade_transaction,
     MILLI_DENOMINATION,
 )
 from transaction_enums import TemplateType, TradeState
@@ -152,6 +154,103 @@ def main():
     print_balances(blockchain, alice, bob)
 
     print("\nOracle integration SUCCESS ✓")
+
+    # ------------------------------------------------------------------
+    # 6️⃣ Test proposal cancellation (party_a cancels before acceptance)
+    # ------------------------------------------------------------------
+    print("\nTesting proposal cancellation...")
+    trade_id_cancel = "ORACLE_TRADE_CANCEL"
+    mempool.add_transaction(
+        create_propose_trade_transaction(
+            trade_id=trade_id_cancel,
+            party_a=alice.miner_address,
+            template_type=TemplateType.UP_DOWN,
+            asset_pair="BTC",
+            strike_price=strike_price,
+            expiry_hours=0.001,
+            collateral_amount=collateral,
+        )
+    )
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    print("Balances after proposal:")
+    print_balances(blockchain, alice, bob)
+    mempool.add_transaction(
+        create_cancel_proposal_transaction(
+            trade_id=trade_id_cancel
+        )
+    )
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    print("Balances after cancellation:")
+    print_balances(blockchain, alice, bob)
+    cancelled_trade = blockchain.get_trade(trade_id_cancel)
+    assert cancelled_trade.state == TradeState.CANCELLED
+
+    # ------------------------------------------------------------------
+    # 7️⃣ Test proposal expiry (auto-expire if not accepted)
+    # ------------------------------------------------------------------
+    print("\nTesting proposal expiry...")
+    trade_id_expire = "ORACLE_TRADE_EXPIRE"
+    mempool.add_transaction(
+        create_propose_trade_transaction(
+            trade_id=trade_id_expire,
+            party_a=alice.miner_address,
+            template_type=TemplateType.UP_DOWN,
+            asset_pair="BTC",
+            strike_price=strike_price,
+            expiry_hours=0.001,
+            collateral_amount=collateral,
+        )
+    )
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    # Sleep until after expiry
+    trade = blockchain.get_trade(trade_id_expire)
+    if trade and hasattr(trade, 'expiry_timestamp'):
+        now = int(time.time())
+        wait = trade.expiry_timestamp - now + 1
+        if wait > 0:
+            print(f"Sleeping {wait} seconds to allow proposal to expire...")
+            time.sleep(wait)
+        blockchain.chain[-1].BlockHeader.Timestamp = trade.expiry_timestamp + 1
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    print("Balances after expiry:")
+    print_balances(blockchain, alice, bob)
+    expired_trade = blockchain.get_trade(trade_id_expire)
+    assert expired_trade.state == TradeState.EXPIRED
+
+    # ------------------------------------------------------------------
+    # 8️⃣ Test trade cancellation after acceptance (party_a cancels after acceptance)
+    # ------------------------------------------------------------------
+    print("\nTesting trade cancellation after acceptance...")
+    trade_id_cancel2 = "ORACLE_TRADE_CANCEL2"
+    mempool.add_transaction(
+        create_propose_trade_transaction(
+            trade_id=trade_id_cancel2,
+            party_a=alice.miner_address,
+            template_type=TemplateType.UP_DOWN,
+            asset_pair="BTC",
+            strike_price=strike_price,
+            expiry_hours=0.001,
+            collateral_amount=collateral,
+        )
+    )
+    mempool.add_transaction(
+        create_accept_trade_transaction(
+            trade_id=trade_id_cancel2,
+            party_b=bob.miner_address,
+        )
+    )
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    mempool.add_transaction(
+        create_cancel_trade_transaction(
+            trade_id=trade_id_cancel2,
+            party_a=alice.miner_address,
+        )
+    )
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    print("Balances after trade cancellation:")
+    print_balances(blockchain, alice, bob)
+    cancelled_trade2 = blockchain.get_trade(trade_id_cancel2)
+    assert cancelled_trade2.state == TradeState.CANCELLED
 
 
 if __name__ == "__main__":
