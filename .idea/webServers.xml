@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="362d01ce-8f99-455f-bd85-5aa059f0aa82" name="AWS A16 UTIL">
+        <fileTransfer rootFolder="/home/ubuntu" accessType="SFTP" host="ec2-3-86-4-216.compute-1.amazonaws.com" port="22" sshConfigId="7ac5c1cf-4e31-47c2-a207-d6b09cafb2e6" sshConfig="AWS A16 UTIL" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
