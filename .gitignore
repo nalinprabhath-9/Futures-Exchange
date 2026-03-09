@@ -1,0 +1,18 @@
+# Oracle secrets and runtime data — never commit these
+oracle/oracle_privkey.hex
+oracle/oracle.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Docker
+.docker/
+
+# macOS
+.DS_Store
+__pycache__
