@@ -1,0 +1,982 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Derivatives Mini-Chain Dashboard</title>
+  <style>
+    :root{
+      --bg:#0b1020; --panel:#0f1730; --panel2:#121b3a; --text:#e9eeff; --muted:#9fb0ff;
+      --good:#35d07f; --warn:#ffcc66; --bad:#ff5c7a; --line:rgba(255,255,255,.09);
+      --chip:rgba(255,255,255,.08);
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius:18px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:var(--sans);
+      background:
+        radial-gradient(1200px 800px at 10% 10%, #15235a 0, transparent 60%),
+        radial-gradient(1200px 800px at 80% 30%, #2a1a5a 0, transparent 55%),
+        var(--bg);
+      color:var(--text);
+    }
+    a{color:inherit}
+    .wrap{max-width:1280px; margin:0 auto; padding:22px;}
+    .topbar{display:flex; gap:14px; align-items:center; justify-content:space-between; margin-bottom:18px;}
+    .title{display:flex; flex-direction:column; gap:2px;}
+    .title h1{margin:0; font-size:20px; letter-spacing:.4px}
+    .title .sub{color:var(--muted); font-size:12px}
+    .row{display:flex; gap:14px; flex-wrap:wrap;}
+    .card{
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      padding:14px;
+    }
+    .card h2{
+      margin:0 0 10px 0;
+      font-size:13px;
+      color:var(--muted);
+      font-weight:600;
+      letter-spacing:.5px;
+      text-transform:uppercase;
+    }
+    .kpis{display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:12px; width:100%;}
+    .kpi{
+      padding:12px;
+      border-radius:14px;
+      border:1px solid var(--line);
+      background:rgba(0,0,0,.18);
+    }
+    .kpi .label{font-size:11px; color:var(--muted)}
+    .kpi .val{font-size:18px; font-weight:700; margin-top:4px; font-family:var(--mono)}
+    .chip{
+      display:inline-flex; align-items:center; gap:8px; padding:6px 10px;
+      border:1px solid var(--line); background:var(--chip); border-radius:999px; font-size:12px;
+    }
+    .dot{
+      width:8px; height:8px; border-radius:999px; background:var(--muted);
+      box-shadow:0 0 0 3px rgba(255,255,255,.06) inset;
+    }
+    .dot.good{background:var(--good)}
+    .dot.bad{background:var(--bad)}
+    .dot.warn{background:var(--warn)}
+
+    select, input, button{font: inherit;}
+    select, input{
+      background:rgba(0,0,0,.25);
+      color:var(--text);
+      border:1px solid var(--line);
+      border-radius:12px;
+      padding:10px 12px;
+      outline:none;
+      width:100%;
+    }
+    button{
+      cursor:pointer;
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.10);
+      color:var(--text);
+      padding:10px 12px;
+      border-radius:12px;
+    }
+    button:hover{background: rgba(255,255,255,.14);}
+    button.primary{
+      background: linear-gradient(90deg, rgba(53,208,127,.25), rgba(159,176,255,.18));
+      border-color: rgba(53,208,127,.35);
+    }
+    button.danger{
+      background: rgba(255,92,122,.15);
+      border-color: rgba(255,92,122,.35);
+    }
+    button.ghost{background: rgba(0,0,0,.18);}
+    .tabs{display:flex; gap:8px; flex-wrap:wrap;}
+    .tab{
+      padding:8px 12px; border-radius:999px; border:1px solid var(--line);
+      background:rgba(0,0,0,.18); font-size:12px; color:var(--muted);
+    }
+    .tab.active{color:var(--text); background:rgba(255,255,255,.10);}
+    .grid{display:grid; grid-template-columns: 1.15fr .85fr; gap:14px; width:100%;}
+    .table{
+      width:100%; border-collapse:collapse; overflow:hidden;
+      border-radius:14px; border:1px solid var(--line);
+    }
+    .table th,.table td{
+      padding:10px 10px;
+      border-bottom:1px solid var(--line);
+      font-size:12px;
+      vertical-align:top;
+    }
+    .table th{
+      color:var(--muted);
+      font-weight:600;
+      text-align:left;
+      background:rgba(0,0,0,.22);
+    }
+    .mono{font-family:var(--mono)}
+    .badge{
+      display:inline-flex; padding:4px 8px; border-radius:999px; font-size:11px;
+      border:1px solid var(--line); background:rgba(0,0,0,.2);
+    }
+    .badge.good{border-color: rgba(53,208,127,.35); color:#bff7d7}
+    .badge.warn{border-color: rgba(255,204,102,.35); color:#ffe3b2}
+    .badge.bad{border-color: rgba(255,92,122,.35); color:#ffb6c3}
+    .two{display:grid; grid-template-columns: 1fr 1fr; gap:10px;}
+    .three{display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px;}
+    .log{
+      height:210px; overflow:auto; padding:10px; border-radius:14px; border:1px solid var(--line);
+      background:rgba(0,0,0,.25); font-family:var(--mono); font-size:11px; white-space:pre-wrap;
+    }
+    .small{font-size:11px; color:var(--muted); line-height:1.42}
+    .footer{margin-top:14px; color:var(--muted); font-size:11px}
+    .help{
+      margin-top:8px; padding:10px; border-radius:14px;
+      border:1px dashed rgba(159,176,255,.25); background:rgba(0,0,0,.18);
+    }
+    .help b{color:var(--text)}
+    .kbd{
+      font-family:var(--mono); font-size:11px; padding:2px 6px;
+      border-radius:8px; border:1px solid var(--line); background:rgba(0,0,0,.22);
+    }
+    .field-label{
+      display:flex; align-items:center; gap:6px;
+      font-size:11px; color:var(--muted); margin-bottom:4px;
+    }
+    .info{
+      display:inline-flex; align-items:center; justify-content:center;
+      width:15px; height:15px; border-radius:999px;
+      border:1px solid var(--line); color:var(--muted);
+      font-size:10px; cursor:help; background:rgba(255,255,255,.05);
+      flex: 0 0 auto;
+    }
+    .section-note{
+      margin-bottom:10px;
+      padding:10px;
+      border-radius:12px;
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.03);
+    }
+
+    .glossary-layout{
+      display:grid;
+      grid-template-columns: 1fr 300px;
+      gap:14px;
+      align-items:start;
+      margin-top:14px;
+    }
+    .glossary{
+      position:sticky;
+      top:18px;
+    }
+    .glossary .term{
+      padding:10px 0;
+      border-bottom:1px solid var(--line);
+    }
+    .glossary .term:last-child{
+      border-bottom:none;
+    }
+    .glossary .term b{
+      display:block;
+      font-size:12px;
+      color:var(--text);
+      margin-bottom:4px;
+    }
+
+    @media (max-width: 1100px){
+      .glossary-layout{grid-template-columns: 1fr;}
+      .glossary{position:static;}
+    }
+    @media (max-width: 980px){
+      .kpis{grid-template-columns: repeat(2, minmax(0,1fr));}
+      .grid{grid-template-columns: 1fr;}
+      .three{grid-template-columns: 1fr;}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="title">
+        <h1>Derivatives Mini-Chain</h1>
+        <div class="sub">
+          Multi-node • Signed actions • Gossip mempool • Manual mining • Capacity enforced at mining
+        </div>
+      </div>
+
+      <div class="row" style="gap:10px; align-items:center;">
+        <div class="chip" title="Auto-refresh polls node endpoints and refreshes the selected tab.">
+          <span class="dot" id="autoDot"></span>
+          <span>Auto-refresh</span>
+          <select id="autoMs" style="width:140px; padding:7px 10px;" aria-label="Auto refresh interval" title="Choose how often the dashboard refreshes data.">
+            <option value="0">Off</option>
+            <option value="1000">Every 1s</option>
+            <option value="1500" selected>Every 1.5s</option>
+            <option value="2500">Every 2.5s</option>
+          </select>
+        </div>
+        <div class="chip" title="Dashboard server port. This is not one of the blockchain node ports.">
+          <span class="dot good"></span>
+          <span>UI Server</span>
+          <span class="mono">:8000</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <div class="row" style="align-items:center; justify-content:space-between;">
+        <div class="tabs" id="tabs"></div>
+
+        <div class="row" style="gap:10px; align-items:center;">
+          <div class="chip" title="Selected node controls what you view and where button actions are sent.">
+            <span class="dot" id="selDot"></span>
+            <span>Selected Node</span>
+            <select id="selNode" style="width:180px; padding:7px 10px;" aria-label="Selected node" title="Choose the active node for viewing and actions.">
+              <option value="5001" selected>Node 5001</option>
+              <option value="5002">Node 5002</option>
+              <option value="5003">Node 5003</option>
+            </select>
+          </div>
+          <button class="primary" id="btnRefresh" title="Refresh network summary and current tab immediately.">Refresh</button>
+        </div>
+      </div>
+
+      <div class="help">
+        <b>Quick start</b>
+        <div class="small" style="margin-top:6px;">
+          1) Run your setup script to start nodes and create users.<br/>
+          2) In <span class="kbd">Wallets</span>, check balances and fund users if needed.<br/>
+          3) In <span class="kbd">Proposals</span>, create a signed proposal.<br/>
+          4) Accept the proposal as another user.<br/>
+          5) In <span class="kbd">Mempool</span>, verify transaction gossip.<br/>
+          6) In <span class="kbd">Blockchain</span>, mine blocks and verify inclusion.
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card" style="width:100%;">
+        <h2>Network Overview</h2>
+        <div class="small" style="margin-bottom:10px;">
+          This section shows one summary card per node: liveness, local chain height, mempool count, open proposals, and peer count.
+        </div>
+        <div class="kpis" id="netKpis"></div>
+      </div>
+    </div>
+
+    <div class="glossary-layout">
+      <div id="views"></div>
+      <div class="card glossary" id="glossaryBox"></div>
+    </div>
+
+    <div class="footer">
+      Tip: Transactions may be <b>gossiped automatically</b>, but mining is typically <b>manual</b> unless your backend starts a background miner.
+    </div>
+  </div>
+
+<script>
+const NODES = ["5001","5002","5003"];
+
+const el = (id)=>document.getElementById(id);
+const tabsEl = el("tabs");
+const viewsEl = el("views");
+
+const state = {
+  tab: "Proposals",
+  selected: "5001",
+  autoMs: 1500,
+  usersByNode: {},
+  last: {}
+};
+
+const TABS = ["Proposals","Wallets","Mempool","Blockchain","Actions"];
+
+const GLOSSARY = {
+  Proposals: [
+    ["Proposal", "A signed offer created by one user to open a trade with specific terms."],
+    ["Maker", "The user who creates and signs the proposal first."],
+    ["Taker", "The second user who accepts the proposal."],
+    ["Expiry", "How long the proposal remains valid before it expires."],
+    ["Signed Action", "An authenticated action created using a user's private key."]
+  ],
+  Wallets: [
+    ["Total", "All coins credited to the wallet on the selected node."],
+    ["Locked", "Coins reserved as collateral and not available for new actions."],
+    ["Available", "Total minus locked. This is the spendable amount."],
+    ["Collateral", "Amount set aside to back a trade."],
+    ["Faucet", "A demo helper that credits funds to a wallet."]
+  ],
+  Mempool: [
+    ["Mempool", "A holding area for valid transactions waiting to be mined."],
+    ["Gossip", "How nodes forward transactions to peers across the network."],
+    ["Pending Transaction", "A transaction accepted by a node but not yet in a block."],
+    ["Mining", "The process of taking pending transactions and writing them into a block."],
+    ["Tx Type", "The category of action, such as propose_trade or accept_trade."]
+  ],
+  Blockchain: [
+    ["Block", "A finalized batch of transactions appended to the chain."],
+    ["Height", "The local block number on the selected node."],
+    ["Prev Hash", "The hash of the previous block, linking chain history together."],
+    ["Tip", "The latest block known to this node."],
+    ["Local Chain", "The blockchain state currently stored on the selected node."]
+  ],
+  Actions: [
+    ["Health", "Basic node status such as reachability, peer list, and tip height."],
+    ["Runbook", "Recommended order of actions for demonstrating the system."],
+    ["Selected Node", "The node the UI currently queries and sends actions to."],
+    ["Auto-refresh", "Automatic data refresh for the current tab and network summary."],
+    ["Debug JSON", "Raw endpoint output used for troubleshooting."]
+  ]
+};
+
+function escapeHtmlAttr(s){
+  return String(s).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function helpIcon(text){
+  return `<span class="info" title="${escapeHtmlAttr(text)}">i</span>`;
+}
+function fieldLabel(text, help){
+  return `<div class="field-label" title="${escapeHtmlAttr(help || text)}">${text}${help ? helpIcon(help) : ""}</div>`;
+}
+function explain(text){
+  return `<div class="help"><div class="small">${text}</div></div>`;
+}
+function th(text, help){
+  return `<th title="${escapeHtmlAttr(help || text)}">${text}</th>`;
+}
+
+function badge(status){
+  const s = (status||"").toUpperCase();
+  let cls = "badge";
+  if (s === "OPEN" || s === "OK" || s === "ACTIVE" || s === "ACCEPTED") cls += " good";
+  else if (s === "EXPIRED" || s === "PENDING") cls += " warn";
+  else if (s.includes("ERR") || s.includes("BAD") || s === "FAILED" || s === "CANCELLED") cls += " bad";
+  return `<span class="${cls}" title="Current status: ${escapeHtmlAttr(s || '-')}">${s || "-"}</span>`;
+}
+
+function short(x, n=10){
+  if (!x) return "-";
+  const s = String(x);
+  if (s.length <= n) return s;
+  return s.slice(0, n) + "…" + s.slice(-6);
+}
+
+async function apiGet(port, path){
+  const r = await fetch(`/api/${port}${path}`);
+  return await r.json();
+}
+async function apiPost(port, path, body){
+  const r = await fetch(`/api/${port}${path}`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(body||{})
+  });
+  return await r.json();
+}
+async function action(name, payload){
+  const r = await fetch(`/action/${name}`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(payload||{})
+  });
+  return await r.json();
+}
+
+function renderTabs(){
+  tabsEl.innerHTML = "";
+  for (const t of TABS){
+    const b = document.createElement("button");
+    b.className = "tab" + (state.tab === t ? " active" : "");
+    b.textContent = t;
+    b.title = ({
+      "Proposals":"Create and browse open contract proposals. Accepting creates the next signed action in the flow.",
+      "Wallets":"View total, locked, and available balances. Useful for collateral troubleshooting.",
+      "Mempool":"See pending transactions waiting to be mined.",
+      "Blockchain":"Inspect recent blocks on the selected node.",
+      "Actions":"Runbook and debugging checks."
+    })[t] || "";
+    b.onclick = ()=>{ state.tab = t; renderView(); };
+    tabsEl.appendChild(b);
+  }
+}
+
+function setNodeDot(ok){
+  el("selDot").className = "dot " + (ok ? "good" : "bad");
+}
+function setAutoDot(){
+  el("autoDot").className = "dot " + (state.autoMs > 0 ? "good" : "warn");
+}
+function netKpiCard(title, value, sub){
+  return `
+    <div class="kpi">
+      <div class="label">${title}</div>
+      <div class="val">${value}</div>
+      <div class="small">${sub || ""}</div>
+    </div>
+  `;
+}
+
+function renderGlossary(){
+  const items = GLOSSARY[state.tab] || [];
+  const html = `
+    <h2>Glossary</h2>
+    <div class="small" style="margin-bottom:10px;">
+      Quick meanings for terms used in the current tab.
+    </div>
+    ${items.map(([term, desc]) => `
+      <div class="term">
+        <b>${term}</b>
+        <div class="small">${desc}</div>
+      </div>
+    `).join("")}
+    <div class="help" style="margin-top:12px;">
+      <div class="small">
+        <b>Crypto note:</b><br/>
+        Proposal and accept actions are typically signed using <b>ECDSA over secp256k1</b>. Nodes verify the signature and confirm the public key maps to the correct wallet address.
+      </div>
+    </div>
+    <div class="help" style="margin-top:12px;">
+      <div class="small">
+        <b>Settlement note:</b><br/>
+        This dashboard currently focuses on the flow up to proposal / acceptance / mining. Settlement testing usually requires <b>expiry</b> plus an <b>oracle/settlement price</b>. That is usually a separate E2E scenario.
+      </div>
+    </div>
+  `;
+  const box = document.getElementById("glossaryBox");
+  if (box) box.innerHTML = html;
+}
+
+async function refreshNetwork(){
+  const snaps = [];
+  for (const p of NODES){
+    const [health, mem, props] = await Promise.allSettled([
+      apiGet(p, "/health"),
+      apiGet(p, "/mempool"),
+      apiGet(p, "/proposals")
+    ]);
+
+    const h = health.status === "fulfilled" ? health.value : null;
+    const m = mem.status === "fulfilled" ? mem.value : null;
+    const pr = props.status === "fulfilled" ? props.value : null;
+
+    snaps.push({
+      port: p,
+      ok: !!(h && h.ok),
+      height: h?.tip_height ?? "-",
+      mempool: (m?.mempool?.length ?? "-"),
+      proposals: (pr?.open?.length ?? "-"),
+      peers: h?.peers?.length ?? "-"
+    });
+  }
+
+  const selHealth = snaps.find(x=>x.port===state.selected);
+  setNodeDot(selHealth?.ok);
+
+  const kpis = [];
+  for (const s of snaps){
+    const dot = s.ok ? "good" : "bad";
+    kpis.push(netKpiCard(
+      `Node ${s.port}`,
+      `<span class="mono" title="Latest known local block height.">${s.height}</span>`,
+      `
+        <span class="chip" title="Mempool = pending tx count, proposals = open proposal count, peers = connected peer URLs count.">
+          <span class="dot ${dot}"></span>
+          mempool <span class="mono">${s.mempool}</span> • proposals <span class="mono">${s.proposals}</span> • peers <span class="mono">${s.peers}</span>
+        </span>
+      `
+    ));
+  }
+  el("netKpis").innerHTML = kpis.join("");
+  state.last.network = snaps;
+}
+
+async function loadUsers(port){
+  const u = await apiGet(port, "/users");
+  state.usersByNode[port] = u?.users || [];
+  return state.usersByNode[port];
+}
+
+function viewShell(leftHtml, rightHtml){
+  return `
+    <div class="grid">
+      <div class="card">${leftHtml}</div>
+      <div class="card">${rightHtml}</div>
+    </div>
+  `;
+}
+
+window.logLine = function(msg){
+  const box = document.getElementById("activityLog");
+  if (!box) return;
+  const t = new Date().toLocaleTimeString();
+  box.textContent = `[${t}] ${msg}\n` + box.textContent;
+};
+
+async function renderProposals(){
+  const port = state.selected;
+  const [props, users] = await Promise.all([
+    apiGet(port, "/proposals"),
+    (state.usersByNode[port] ? Promise.resolve(state.usersByNode[port]) : loadUsers(port))
+  ]);
+
+  const open = props?.open || [];
+  const rows = open.map(p=>{
+    const terms = (()=>{ try{return JSON.parse(p.terms_json);}catch(e){return {};}})();
+    return `
+      <tr>
+        <td class="mono" title="Unique proposal identifier.">${short(p.proposal_id, 18)}</td>
+        <td title="User who created and signed the proposal.">${p.maker_user_id}</td>
+        <td title="Trade direction.">${terms.side || "-"}</td>
+        <td class="mono" title="Contract quantity.">${terms.qty ?? "-"}</td>
+        <td class="mono" title="Reference price.">${terms.price ?? "-"}</td>
+        <td class="mono" title="Proposal expiration time.">${new Date((terms.expires_at||0)*1000).toLocaleString()}</td>
+        <td>${badge(p.status)}</td>
+        <td><button class="primary" onclick="openAccept('${p.proposal_id}')" title="Accept this proposal as another user.">Accept</button></td>
+      </tr>
+    `;
+  }).join("");
+
+  const left = `
+    <h2>Open Proposals (Node ${port})</h2>
+    <div class="section-note small">
+      A proposal is a <b>signed offer</b> from one user. Another user can accept it. The trade is not settled here — this is an early state in the lifecycle.
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          ${th("Proposal ID","Unique proposal identifier.")}
+          ${th("Maker","User who created and signed the proposal.")}
+          ${th("Side","Trade direction such as LONG or SHORT.")}
+          ${th("Qty","Contract quantity.")}
+          ${th("Price","Reference price used in the proposal.")}
+          ${th("Expiry","Time when the proposal stops being valid.")}
+          ${th("Status","Current proposal state.")}
+          ${th("Action","Available next action.")}
+        </tr>
+      </thead>
+      <tbody>${rows || `<tr><td colspan="8" class="small">No open proposals on this node.</td></tr>`}</tbody>
+    </table>
+    ${explain(`
+      <b>Expected flow:</b><br/>
+      • Create proposal on one node.<br/>
+      • See it appear here and, if gossip works, on peer nodes too.<br/>
+      • Accept as another user.<br/>
+      • Mine a block to finalize the next state transition.
+    `)}
+  `;
+
+  const userOpts = users.map(u=>`<option value="${u.user_id}">${u.user_id}</option>`).join("");
+  const right = `
+    <h2>Create Proposal</h2>
+    <div class="section-note small">
+      This creates a <b>signed proposal transaction</b>. Your backend typically signs it using the maker's private key before sending it to the selected node.
+    </div>
+
+    <div class="two">
+      <div>
+        ${fieldLabel("Maker","The user who creates and signs the proposal.")}
+        <select id="makerSel" title="Choose the user who signs this proposal.">${userOpts}</select>
+      </div>
+      <div>
+        ${fieldLabel("Underlying","Asset symbol referenced by the contract, such as BTC or ETH.")}
+        <input id="underlying" value="BTC" title="Underlying asset symbol."/>
+      </div>
+    </div>
+
+    <div class="two" style="margin-top:10px;">
+      <div>
+        ${fieldLabel("Side","Contract direction or position side, such as LONG or SHORT.")}
+        <select id="sideSel" title="Choose LONG or SHORT.">
+          <option value="LONG">LONG</option>
+          <option value="SHORT">SHORT</option>
+        </select>
+      </div>
+      <div>
+        ${fieldLabel("Quantity","The number of contract units.")}
+        <input id="qty" type="number" value="1" min="1" title="Contract quantity."/>
+      </div>
+    </div>
+
+    <div class="two" style="margin-top:10px;">
+      <div>
+        ${fieldLabel("Entry Price","Reference price used at proposal time.")}
+        <input id="price" type="number" value="45000" min="0" title="Reference price used in proposal creation."/>
+      </div>
+      <div>
+        ${fieldLabel("Collateral","Collateral amount required for the trade.")}
+        <input id="collateral" type="number" value="200" min="0" title="Collateral amount required by the proposal."/>
+      </div>
+    </div>
+
+    <div style="margin-top:10px;">
+      ${fieldLabel("Expiry (seconds)","How many seconds this proposal remains valid. Use short values if you later want to test expiry or settlement.")}
+      <input id="expiry" type="number" value="3600" min="1" title="Proposal expiry in seconds from now."/>
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <button class="primary" onclick="doPropose()" title="Create and submit the signed proposal on the selected node.">Create Proposal (signed)</button>
+      <button class="ghost" onclick="doMine()" title="Mine a block on the selected node. Mining is usually manual in this dashboard.">Mine (selected node)</button>
+    </div>
+
+    <h2 style="margin-top:14px;">Activity</h2>
+    <div class="log" id="activityLog" aria-label="Proposal activity log"></div>
+
+    ${explain(`
+      <b>Common errors:</b><br/>
+      • <b>insufficient collateral</b> → fund wallets first in Wallets.<br/>
+      • <b>proposal expired</b> → increase expiry seconds.<br/>
+      • <b>not visible on peers</b> → check gossip / peer config.
+    `)}
+  `;
+
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+window.doPropose = async function(){
+  const port = state.selected;
+  const maker = el("makerSel").value;
+  const payload = {
+    node: `http://127.0.0.1:${port}`,
+    maker,
+    template: "FUTURES_V1",
+    underlying: el("underlying").value,
+    side: el("sideSel").value,
+    qty: Number(el("qty").value),
+    price: Number(el("price").value),
+    expiry: Number(el("expiry").value),
+    collateral: Number(el("collateral").value),
+  };
+  logLine(`Propose: ${payload.underlying} ${payload.side} qty=${payload.qty} price=${payload.price} coll=${payload.collateral}`);
+  const res = await action("propose", payload);
+  if (res.ok) {
+    const pid = res.parsed?.proposal_id || "(unknown)";
+    logLine(`✅ Proposal created: ${pid}`);
+  } else {
+    logLine(`❌ Propose failed: ${res.parsed?.message || res.stderr || res.stdout || "unknown error"}`);
+  }
+  await refreshAll();
+};
+
+window.openAccept = function(proposalId){
+  const taker = prompt("Enter taker user_id (the user accepting this proposal):", "user2");
+  if (!taker) return;
+  doAccept(proposalId, taker);
+};
+
+window.doAccept = async function(proposal_id, taker){
+  const port = state.selected;
+  logLine(`Accept: proposal=${proposal_id} taker=${taker}`);
+  const res = await action("accept", {
+    node: `http://127.0.0.1:${port}`,
+    proposal_id,
+    taker
+  });
+  if (res.ok) {
+    const txid = res.parsed?.agreement_tx_id || "(tx?)";
+    logLine(`✅ Accepted. Next signed transaction created: ${txid}`);
+  } else {
+    logLine(`❌ Accept failed: ${res.parsed?.message || res.stderr || res.stdout || "unknown error"}`);
+  }
+  await refreshAll();
+};
+
+window.doMine = async function(){
+  const port = state.selected;
+  logLine(`Mine on node ${port}`);
+  const res = await action("mine", { node: `http://127.0.0.1:${port}`});
+  if (res.ok) {
+    logLine(`✅ Mined block height=${res.parsed?.mined_height} included=${res.parsed?.included_txs} remaining=${res.parsed?.remaining_in_mempool}`);
+  } else {
+    logLine(`❌ Mine failed: ${res.parsed?.message || res.stderr || res.stdout || "unknown error"}`);
+  }
+  await refreshAll();
+};
+
+async function renderWallets(){
+  const port = state.selected;
+  const users = await (state.usersByNode[port] ? Promise.resolve(state.usersByNode[port]) : loadUsers(port));
+
+  const balances = [];
+  for (const u of users){
+    const b = await apiGet(port, `/balance/${u.address}`);
+    balances.push({u, b});
+  }
+
+  const rows = balances.map(({u,b})=>{
+    return `
+      <tr>
+        <td title="User identifier.">${u.user_id}</td>
+        <td class="mono" title="Wallet address.">${short(u.address, 20)}</td>
+        <td class="mono" title="Total balance on this node.">${b.balance}</td>
+        <td class="mono" title="Locked collateral or reserved amount.">${b.locked}</td>
+        <td class="mono" title="Spendable amount after subtracting locked.">${b.available}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const left = `
+    <h2>Wallets (Node ${port})</h2>
+    <div class="section-note small">
+      <b>Total</b> = all funds known on this node.<br/>
+      <b>Locked</b> = reserved collateral.<br/>
+      <b>Available</b> = Total − Locked.
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          ${th("User","User identifier.")}
+          ${th("Address","Wallet address.")}
+          ${th("Total","Total balance.")}
+          ${th("Locked","Reserved / collateral balance.")}
+          ${th("Available","Spendable balance.")}
+        </tr>
+      </thead>
+      <tbody>${rows || `<tr><td colspan="5" class="small">No users found. Run your setup script first.</td></tr>`}</tbody>
+    </table>
+    ${explain(`If you hit <b>insufficient collateral</b>, fund users here first or reduce proposal size.`)}
+  `;
+
+  const opts = users.map(u=>`<option value="${u.user_id}">${u.user_id}</option>`).join("");
+  const right = `
+    <h2>Wallet Actions</h2>
+    <div class="section-note small">
+      These are demo utilities. In many real systems, balance changes happen only via on-chain transactions.
+    </div>
+    <div class="two">
+      <div>
+        ${fieldLabel("User","The wallet owner to fund or lock.")}
+        <select id="wUser" title="Choose the user whose wallet will be updated.">${opts}</select>
+      </div>
+      <div>
+        ${fieldLabel("Amount","Amount to deposit or lock. Unit depends on your backend and existing scripts.")}
+        <input id="wAmt" type="number" value="500" min="0" title="Amount for deposit or lock action."/>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px;">
+      <button class="primary" onclick="doDeposit()" title="Credit demo funds to the selected user.">Faucet Deposit</button>
+      <button class="ghost" onclick="doLock()" title="Lock collateral for the selected user if the backend supports it.">Lock Collateral</button>
+    </div>
+    ${explain(`Some backends only show collateral lock after the corresponding transaction is mined.`)}
+  `;
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+window.doDeposit = async function(){
+  const port = state.selected;
+  const user = el("wUser").value;
+  const amt = Number(el("wAmt").value);
+  const res = await action("deposit", {node:`http://127.0.0.1:${port}`, user, amount:amt});
+  alert(res.ok ? `Deposited ${amt} to ${user}` : (res.parsed?.message || res.stderr || "Deposit failed"));
+  await refreshAll();
+};
+
+window.doLock = async function(){
+  const port = state.selected;
+  const user = el("wUser").value;
+  const amt = Number(el("wAmt").value);
+  const res = await action("lock", {node:`http://127.0.0.1:${port}`, user, amount:amt});
+  alert(res.ok ? `Locked ${amt} for ${user}` : (res.parsed?.message || res.stderr || "Lock failed"));
+  await refreshAll();
+};
+
+async function renderMempool(){
+  const port = state.selected;
+  const mp = await apiGet(port, "/mempool");
+  const rows = (mp.mempool || []).map(t=>{
+    return `
+      <tr>
+        <td class="mono" title="Unique transaction identifier.">${short(t.tx_id, 18)}</td>
+        <td title="Transaction type.">${t.tx_type}</td>
+        <td class="mono" title="Transaction creation or receive time.">${t.created_at}</td>
+        <td class="mono" title="Serialized transaction payload preview.">${short(t.payload_json, 40)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const left = `
+    <h2>Mempool (Node ${port})</h2>
+    <div class="section-note small">
+      The mempool stores <b>pending transactions</b> that have been accepted by the node but not yet included in a block.
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          ${th("Tx ID","Unique transaction identifier.")}
+          ${th("Type","Transaction type such as propose_trade or accept_trade.")}
+          ${th("Created","Time the node recorded the transaction.")}
+          ${th("Payload","Short preview of the transaction payload.")}
+        </tr>
+      </thead>
+      <tbody>${rows || `<tr><td colspan="4" class="small">Mempool empty.</td></tr>`}</tbody>
+    </table>
+    ${explain(`
+      <b>Expected behavior:</b><br/>
+      • Submit tx on one node → appears there first.<br/>
+      • If gossip works → appears on peer nodes too.<br/>
+      • After mining → included txs disappear from mempool and appear in Blockchain.
+    `)}
+  `;
+
+  const right = `
+    <h2>Mining</h2>
+    <div class="section-note small">
+      Mining is typically <b>manual</b> in this UI. It selects pending transactions from the selected node's mempool and writes a block.
+    </div>
+    <button class="primary" onclick="doMine()" title="Mine a block on the selected node.">Mine on selected node</button>
+    ${explain(`
+      If you expected a tx here but do not see it:<br/>
+      • refresh the page<br/>
+      • switch to the node where it was submitted<br/>
+      • verify peer/gossip configuration
+    `)}
+  `;
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+async function renderBlockchain(){
+  const port = state.selected;
+  const chain = await apiGet(port, "/chain?limit=20");
+  const blocks = chain.blocks || [];
+  const rows = blocks.map(b=>{
+    let txs = [];
+    try{ txs = JSON.parse(b.txs_json || "[]"); }catch(e){}
+    const types = txs.map(x=>x.tx_type).join(", ");
+    return `
+      <tr>
+        <td class="mono" title="Block height.">${b.height}</td>
+        <td class="mono" title="Block hash.">${short(b.block_hash, 18)}</td>
+        <td class="mono" title="Previous block hash.">${short(b.prev_hash, 18)}</td>
+        <td class="mono" title="Block timestamp.">${new Date((b.ts||0)*1000).toLocaleString()}</td>
+        <td class="mono" title="Number of transactions in the block.">${txs.length}</td>
+        <td title="Transaction types present in this block.">${types || "-"}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const left = `
+    <h2>Blockchain (Node ${port})</h2>
+    <div class="section-note small">
+      This is the <b>local blockchain view</b> of the selected node. Depending on your backend, blocks may be local unless you explicitly synchronize them.
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          ${th("Height","Local block height.")}
+          ${th("Hash","Block hash identifier.")}
+          ${th("Prev","Previous block hash.")}
+          ${th("Time","Block creation time.")}
+          ${th("Txs","Number of transactions.")}
+          ${th("Types","Types of transactions included in the block.")}
+        </tr>
+      </thead>
+      <tbody>${rows || `<tr><td colspan="6" class="small">No blocks returned.</td></tr>`}</tbody>
+    </table>
+    ${explain(`If a transaction was submitted but not mined yet, it will still be visible in <b>Mempool</b>, not here.`)}
+  `;
+
+  const right = `
+    <h2>Mine</h2>
+    <div class="section-note small">
+      Use this action to create the next block on the selected node.
+    </div>
+    <button class="primary" onclick="doMine()" title="Mine a new block on the selected node.">Mine on selected node</button>
+    ${explain(`Trade state transitions and collateral changes may only appear <b>after mining</b>, depending on your backend design.`)}
+  `;
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+async function renderActions(){
+  const port = state.selected;
+  const right = `
+    <h2>Runbook</h2>
+    <div class="small">
+      Suggested flow:
+      <ol>
+        <li><b>Wallets</b> → Fund maker and taker.</li>
+        <li><b>Proposals</b> → Create signed proposal.</li>
+        <li><b>Proposals</b> → Accept as another user.</li>
+        <li><b>Mempool</b> → Verify propagation across nodes.</li>
+        <li><b>Blockchain</b> → Mine on one or more nodes.</li>
+        <li>Check balances and trade state.</li>
+      </ol>
+    </div>
+    ${explain(`
+      <b>Settlement note:</b><br/>
+      This UI does not yet walk through settlement E2E by default. Settlement usually requires:
+      <br/>• active trade
+      <br/>• expiry reached
+      <br/>• oracle or settlement price
+      <br/>• signed settle transaction
+      <br/>• mining that transaction
+    `)}
+  `;
+  const left = `
+    <h2>Live JSON Checks (Node ${port})</h2>
+    <div class="small" style="margin-bottom:10px;">
+      These buttons fetch raw endpoint responses from the selected node for debugging.
+    </div>
+    <div class="three">
+      <button onclick="quick('health')" title="Fetch node health JSON.">Health</button>
+      <button onclick="quick('proposals')" title="Fetch open proposals JSON.">Proposals</button>
+      <button onclick="quick('mempool')" title="Fetch mempool JSON.">Mempool</button>
+    </div>
+    <div class="log" id="quickLog" style="margin-top:12px;" aria-label="Quick JSON output"></div>
+  `;
+  viewsEl.innerHTML = viewShell(left, right);
+}
+
+window.quick = async function(kind){
+  const port = state.selected;
+  const box = document.getElementById("quickLog");
+  const map = {health:"/health", proposals:"/proposals", mempool:"/mempool"};
+  const data = await apiGet(port, map[kind]);
+  box.textContent = JSON.stringify(data, null, 2);
+};
+
+async function renderView(){
+  renderTabs();
+  if (state.tab === "Proposals") await renderProposals();
+  if (state.tab === "Wallets") await renderWallets();
+  if (state.tab === "Mempool") await renderMempool();
+  if (state.tab === "Blockchain") await renderBlockchain();
+  if (state.tab === "Actions") await renderActions();
+  renderGlossary();
+}
+
+async function refreshAll(){
+  await refreshNetwork();
+  await renderView();
+}
+
+let timer = null;
+function setAuto(ms){
+  state.autoMs = ms;
+  setAutoDot();
+  if (timer) { clearInterval(timer); timer = null; }
+  if (ms > 0){
+    timer = setInterval(()=>refreshAll().catch(()=>{}), ms);
+  }
+}
+
+el("selNode").addEventListener("change", async (e)=>{
+  state.selected = e.target.value;
+  await refreshAll();
+});
+el("autoMs").addEventListener("change", (e)=>{
+  setAuto(Number(e.target.value));
+});
+el("btnRefresh").addEventListener("click", ()=>refreshAll());
+
+(async function init(){
+  state.selected = el("selNode").value;
+  renderTabs();
+  setAuto(state.autoMs);
+  await refreshAll();
+})();
+</script>
+</body>
+</html>

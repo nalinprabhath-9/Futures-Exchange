@@ -1,82 +1,23 @@
-# FutureCoin Futures Exchange
+# Futures-Exchange
 
-A peer-to-peer blockchain-based futures trading system for crypto assets, combining proof-of-work mining with bilateral futures contracts.
+Execution Steps:
 
-## Overview
+## Step 1: Run Full Automated Setup
 
-FutureCoin is a custom blockchain implementation that enables users to:
-
-1. **Mine FutureCoins** using proof-of-work consensus
-2. **Trade futures contracts** using mined coins as collateral
-3. **Execute deterministic settlements** based on oracle price feeds
-
-The system supports bilateral, template-based futures trades without orderbooks or liquidity pools.
-
-## Features
-
-### Blockchain Core
-
-- Proof-of-Work mining with adjustable difficulty
-- Double SHA-256 hashing
-- Merkle root calculation
-- Block validation and chain integrity
-- Transaction memory pool (mempool)
-- UTXO-style outputs with script addresses
-
-### Futures Trading
-
-- Multiple transaction types (Propose, Accept, Deposit, Settle, Cancel)
-- Collateral locking mechanism
-- Balance tracking (total, locked, available)
-- Trade state management
-- Automatic settlement execution
-- Template-based contract logic
-
-### Supported Templates
-
-1. **UP/DOWN** - Binary outcome: price goes up or down
-2. **LONG/SHORT** - Proportional payout based on price movement
-3. **RANGE** - Price stays within specified range (planned)
-
-## Price Oracle
-
-Standalone service in that fetches, signs, and serves real-time crypto prices. Acts as the trust anchor for on-chain trade settlement — nodes verify price payloads using the oracle's secp256k1 public key.
-
-**How it works:** Prices are fetched on demand (CoinGecko primary, CoinCap fallback) and cached for 30s. Every response is signed with ECDSA so nodes can trustlessly verify it during settlement.
-
-### Run
+This will:
+- Reset databases
+- Seed users + generate keystore
+- Start 3 blockchain nodes
+- Import users
+- Deposit + lock collateral
+- Create proposal
+- Accept proposal
+- Mine agreement into a block
 
 ```bash
-docker compose up oracle --build
+chmod +x run_all.sh
+./run_all.sh
 ```
-
-For mock mode (no internet, fake prices):
-
-```bash
-MOCK_MODE=true docker compose up oracle --build
-```
-
-### Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /price/{symbol}` | Current signed price for any asset |
-| `GET /price/{symbol}/at/{timestamp}` | Historical signed price closest to timestamp |
-| `GET /health` | Liveness check + oracle public key |
-| `GET /oracle/pubkey` | Oracle's compressed secp256k1 public key |
-| `GET /docs` | Interactive Swagger UI |
-
-### Example
-
-```bash
-curl -s localhost:8080/price/BTC | python3 -m json.tool
-```
-
-```json
-{
-    "symbol": "BTC",
-    "price": 97234.5,
-    "timestamp": 1708000000,
-    "signature": "3045022100...",
-    "oracle_pubkey": "02a3f7c1..."
-}
+after the above execution, you can Launch the Web UI:
+In a new terminal : python ui_server.py --port 8000
+and open http://127.0.0.1:8000 in browser
