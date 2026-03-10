@@ -1,0 +1,15 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+flask = "==3.0.3"
+requests = "==2.32.3"
+cryptography = "==42.0.8"
+ecdsa = "==0.19.0"
+
+[dev-packages]
+
+[requires]
+python_version = "3.14"
