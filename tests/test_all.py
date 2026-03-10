@@ -20,6 +20,7 @@ from node.transaction_enums import TemplateType
 # Helpers
 # ------------------------------------------------------------
 
+
 def submit(node, tx):
     """
     Submit a signed transaction to a node.
@@ -30,10 +31,9 @@ def submit(node, tx):
       - node/blockchain.py -> TxnMemoryPool.add_transaction()
     """
     from node.tx_codec import futures_tx_to_wire
+
     return requests.post(
-        f"{node}/tx/submit",
-        json={"tx": futures_tx_to_wire(tx)},
-        timeout=10
+        f"{node}/tx/submit", json={"tx": futures_tx_to_wire(tx)}, timeout=10
     ).json()
 
 
@@ -101,8 +101,11 @@ def print_case(title):
 # Main
 # ------------------------------------------------------------
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Run end-to-end and edge-case tests for Futures Exchange")
+    parser = argparse.ArgumentParser(
+        description="Run end-to-end and edge-case tests for Futures Exchange"
+    )
     parser.add_argument("--users-file", default="users.json", help="Path to users.json")
     parser.add_argument("--node1", default="http://localhost:5001", help="Node 1 URL")
     parser.add_argument("--node2", default="http://localhost:5002", help="Node 2 URL")
@@ -204,7 +207,11 @@ def main():
         print("trade @ node1 fallback:", t)
 
     assert_ok(t, "trade lookup")
-    assert t.get("trade", {}).get("state") in ("active", "ACTIVE", "TradeState.ACTIVE"), t
+    assert t.get("trade", {}).get("state") in (
+        "active",
+        "ACTIVE",
+        "TradeState.ACTIVE",
+    ), t
 
     # --------------------------------------------------------
     # CASE 2: Low fee rejection
@@ -260,7 +267,7 @@ def main():
         collateral_amount=collateral,
         privkey_hex=None,  # do not sign properly
     )
-    tx_bad_sig.signature = b"\x30\x00"   # intentionally invalid
+    tx_bad_sig.signature = b"\x30\x00"  # intentionally invalid
     tx_bad_sig.pubkey = bytes.fromhex(A["pubkey_hex"])
 
     r = submit(N1, tx_bad_sig)
@@ -309,7 +316,11 @@ def main():
     t = get_trade(N1, trade_cancel)
     print("trade cancel state:", t)
     assert_ok(t, "cancelled trade lookup")
-    assert t.get("trade", {}).get("state") in ("cancelled", "CANCELLED", "TradeState.CANCELLED"), t
+    assert t.get("trade", {}).get("state") in (
+        "cancelled",
+        "CANCELLED",
+        "TradeState.CANCELLED",
+    ), t
 
     # --------------------------------------------------------
     # CASE 5: Insufficient collateral
@@ -364,27 +375,27 @@ def main():
             print("trade insuf state:", t2)
 
             if t2.get("ok"):
-                assert t2.get("trade", {}).get("state") not in ("active", "ACTIVE", "TradeState.ACTIVE"), t2
+                assert t2.get("trade", {}).get("state") not in (
+                    "active",
+                    "ACTIVE",
+                    "TradeState.ACTIVE",
+                ), t2
 
     # --------------------------------------------------------
-    # CASE 6: Cancel ACTIVE trade
+    # CASE 6: Cancel ACTIVE trade must be rejected
     #
     # Scenario:
-    #   user1 proposes, user2 accepts, trade becomes ACTIVE,
-    #   then user1 cancels active trade.
+    #   user1 proposes, user2 accepts, trade becomes ACTIVE.
+    #   user1 then attempts to cancel the active trade.
     #
     # Expected:
-    #   after mining, trade becomes CANCELLED
+    #   cancel submission is rejected — only PROPOSED trades can be cancelled.
+    #   trade remains ACTIVE after the attempt.
     # --------------------------------------------------------
-    print_case("CASE 6: Cancel ACTIVE trade")
+    print_case("CASE 6: Cancel ACTIVE trade must be rejected")
 
     trade_active_cancel = f"ACTCANCEL{int(time.time())}"
     collateral2 = 40000
-
-    balA_before = get_balance(N1, A["address"])
-    balB_before = get_balance(N1, B["address"])
-    print("balA before:", balA_before)
-    print("balB before:", balB_before)
 
     txp5 = create_propose_trade_transaction(
         trade_id=trade_active_cancel,
@@ -418,36 +429,105 @@ def main():
     assert_ok(r, "mine to activate node2")
 
     t = get_trade(N2, trade_active_cancel)
-    print("trade active:", t)
     if not t.get("ok"):
         t = get_trade(N1, trade_active_cancel)
-        print("trade active fallback node1:", t)
-
+    print("trade active:", t)
     assert_ok(t, "active trade lookup")
-    assert t.get("trade", {}).get("state") in ("active", "ACTIVE", "TradeState.ACTIVE"), t
+    assert t.get("trade", {}).get("state") in (
+        "active",
+        "ACTIVE",
+        "TradeState.ACTIVE",
+    ), t
 
+    # Attempt to cancel — must be rejected since trade is ACTIVE
     tx_can_active = create_cancel_trade_transaction(
         trade_id=trade_active_cancel,
         party_a=A["address"],
         privkey_hex=A["privkey_hex"],
     )
     r = submit(N1, tx_can_active)
-    print("cancel active tx:", r)
-    assert_ok(r, "cancel active tx submit")
+    print("cancel active tx (should be rejected):", r)
+    assert_not_ok(r, "cancel of active trade should be rejected")
+    print("✅ Cancel of ACTIVE trade correctly rejected")
+
+    # Confirm trade is still ACTIVE
+    t = get_trade(N1, trade_active_cancel)
+    print("trade state after rejected cancel:", t)
+    assert_ok(t, "trade still exists after rejected cancel")
+    assert t.get("trade", {}).get("state") in (
+        "active",
+        "ACTIVE",
+        "TradeState.ACTIVE",
+    ), f"Trade should still be ACTIVE but got: {t.get('trade', {}).get('state')}"
+
+    # --------------------------------------------------------
+    # CASE 7: Cancel PROPOSED trade is allowed
+    #
+    # Scenario:
+    #   user1 proposes a trade. Before user2 accepts (trade still PROPOSED),
+    #   user1 cancels it.
+    #
+    # Expected:
+    #   cancel submission is accepted.
+    #   after mining, trade is CANCELLED and collateral is returned.
+    # --------------------------------------------------------
+    print_case("CASE 7: Cancel PROPOSED (unaccepted) trade is allowed")
+
+    trade_proposed_cancel = f"PROPCANCEL{int(time.time())}"
+    collateral3 = 3000
+
+    txp7 = create_propose_trade_transaction(
+        trade_id=trade_proposed_cancel,
+        party_a=A["address"],
+        template_type=TemplateType.UP_DOWN,
+        asset_pair="BTC/USD",
+        strike_price=45000,
+        expiry_hours=1,
+        collateral_amount=collateral3,
+        privkey_hex=A["privkey_hex"],
+    )
+    r = submit(N1, txp7)
+    print("propose:", r)
+    assert_ok(r, "proposal submit")
+
+    # Mine so the proposal is on-chain (collateral locked)
+    r = mine(N1)
+    print("mine proposal:", r)
+    assert_ok(r, "mine proposal")
+
+    t = get_trade(N1, trade_proposed_cancel)
+    print("trade state after proposal mined:", t)
+    assert_ok(t, "proposed trade lookup")
+    assert t.get("trade", {}).get("state") in (
+        "proposed",
+        "PROPOSED",
+        "TradeState.PROPOSED",
+    ), t
+
+    # Cancel the proposed (unaccepted) trade — must succeed
+    txc7 = create_cancel_proposal_transaction(
+        trade_id=trade_proposed_cancel,
+        party_a=A["address"],
+        privkey_hex=A["privkey_hex"],
+    )
+    r = submit(N1, txc7)
+    print("cancel proposed tx:", r)
+    assert_ok(r, "cancel of proposed trade should be accepted")
+    print("✅ Cancel of PROPOSED trade accepted into mempool")
 
     r = mine(N1)
-    print("mine cancel active:", r)
-    assert_ok(r, "mine cancel active")
+    print("mine cancel:", r)
+    assert_ok(r, "mine cancel")
 
-    t = get_trade(N1, trade_active_cancel)
-    print("trade after cancel active:", t)
-    assert_ok(t, "cancelled active trade lookup")
-    assert t.get("trade", {}).get("state") in ("cancelled", "CANCELLED", "TradeState.CANCELLED"), t
-
-    balA_after = get_balance(N1, A["address"])
-    balB_after = get_balance(N1, B["address"])
-    print("balA after:", balA_after)
-    print("balB after:", balB_after)
+    t = get_trade(N1, trade_proposed_cancel)
+    print("trade state after cancel mined:", t)
+    assert_ok(t, "cancelled trade lookup")
+    assert t.get("trade", {}).get("state") in (
+        "cancelled",
+        "CANCELLED",
+        "TradeState.CANCELLED",
+    ), f"Expected CANCELLED but got: {t.get('trade', {}).get('state')}"
+    print("✅ PROPOSED trade correctly moved to CANCELLED after mining")
 
     print("\nALL DONE ✅")
 
