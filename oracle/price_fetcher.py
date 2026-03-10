@@ -3,8 +3,8 @@ On-demand price fetching module.
 
 When a price is requested, the oracle checks its DB cache first. If the cached
 entry is fresh enough (< CACHE_MAX_AGE seconds old), it's returned immediately.
-Otherwise, the oracle fetches a live price from CoinGecko (primary) or CoinCap
-(fallback), stores it, and returns it.
+Otherwise, the oracle fetches a live price from CryptoCompare (primary) or
+Coinbase (fallback), stores it, and returns it.
 
 Mock mode (MOCK_MODE=true):
   - Every symbol starts at MOCK_BASE_PRICE and random-walks on each fetch.
@@ -24,78 +24,43 @@ from config import CACHE_MAX_AGE, MOCK_BASE_PRICE, MOCK_MODE, MOCK_SEED
 _mock_prices: dict[str, float] = {}
 _rng: random.Random = random.Random(MOCK_SEED)
 
-# Maps ticker symbols (e.g. "BTC") to CoinGecko IDs (e.g. "bitcoin").
-# Populated lazily on first use from CoinGecko's /coins/list endpoint.
-_coingecko_id_map: dict[str, str] = {}
-_coingecko_map_loaded: bool = False
-
-
-# ---------------------------------------------------------------------------
-# CoinGecko ID resolution
-# ---------------------------------------------------------------------------
-
-
-def _ensure_coingecko_map() -> None:
-    """Fetch the full symbol→id mapping from CoinGecko once, then cache it."""
-    global _coingecko_map_loaded
-    if _coingecko_map_loaded:
-        return
-    url = "https://api.coingecko.com/api/v3/coins/list"
-    try:
-        resp = httpx.get(url, timeout=10.0)
-        resp.raise_for_status()
-        for coin in resp.json():
-            sym = coin.get("symbol", "").upper()
-            cg_id = coin.get("id", "")
-            # Keep the first mapping per symbol (CoinGecko lists the most
-            # popular coins first in alphabetical order, but duplicates are
-            # rare for major tickers like BTC/ETH/SOL).
-            if sym and cg_id and sym not in _coingecko_id_map:
-                _coingecko_id_map[sym] = cg_id
-        _coingecko_map_loaded = True
-        print(
-            f"[price_fetcher] Loaded {len(_coingecko_id_map)} CoinGecko symbol mappings"
-        )
-    except Exception as exc:
-        print(f"[price_fetcher] Failed to load CoinGecko coin list: {exc}")
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 
-def _fetch_coingecko(symbol: str) -> Optional[float]:
-    """Fetch a single symbol's USD price from CoinGecko, or None on failure."""
-    _ensure_coingecko_map()
-    cg_id = _coingecko_id_map.get(symbol.upper())
-    if cg_id is None:
-        print(f"[price_fetcher] No CoinGecko ID found for {symbol}")
-        return None
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
+def _fetch_cryptocompare(symbol: str) -> Optional[float]:
+    """Fetch a single symbol's USD price from CryptoCompare, or None on failure."""
+    url = (
+        f"https://min-api.cryptocompare.com/data/price?fsym={symbol.upper()}&tsyms=USD"
+    )
     try:
         resp = httpx.get(url, timeout=5.0)
         resp.raise_for_status()
         data = resp.json()
-        if cg_id in data and "usd" in data[cg_id]:
-            return float(data[cg_id]["usd"])
+        if "USD" in data:
+            return float(data["USD"])
+        if "Response" in data and data["Response"] == "Error":
+            print(
+                f"[price_fetcher] CryptoCompare error for {symbol}: {data.get('Message')}"
+            )
     except Exception as exc:
-        print(f"[price_fetcher] CoinGecko error for {symbol}: {exc}")
+        print(f"[price_fetcher] CryptoCompare error for {symbol}: {exc}")
     return None
 
 
-def _fetch_coincap(symbol: str) -> Optional[float]:
-    """Fetch a single symbol's USD price from CoinCap v2, or None on failure."""
-    # CoinCap uses lowercase full names, but also supports searching by symbol.
-    url = f"https://api.coincap.io/v2/assets?search={symbol.upper()}&limit=1"
+def _fetch_coinbase(symbol: str) -> Optional[float]:
+    """Fetch a single symbol's USD price from Coinbase, or None on failure."""
+    url = f"https://api.coinbase.com/v2/prices/{symbol.upper()}-USD/spot"
     try:
         resp = httpx.get(url, timeout=5.0)
         resp.raise_for_status()
-        data = resp.json().get("data", [])
-        if data and data[0].get("symbol", "").upper() == symbol.upper():
-            return float(data[0]["priceUsd"])
+        data = resp.json().get("data", {})
+        if "amount" in data:
+            return float(data["amount"])
     except Exception as exc:
-        print(f"[price_fetcher] CoinCap error for {symbol}: {exc}")
+        print(f"[price_fetcher] Coinbase error for {symbol}: {exc}")
     return None
 
 
@@ -134,12 +99,14 @@ def get_price(symbol: str) -> tuple[float, int]:
         price = _fetch_mock(sym)
         source = "mock"
     else:
-        price = _fetch_coingecko(sym)
-        source = "coingecko"
+        price = _fetch_cryptocompare(sym)
+        source = "cryptocompare"
         if price is None:
-            print(f"[price_fetcher] CoinGecko unavailable for {sym}, trying CoinCap...")
-            price = _fetch_coincap(sym)
-            source = "coincap"
+            print(
+                f"[price_fetcher] CryptoCompare unavailable for {sym}, trying Coinbase..."
+            )
+            price = _fetch_coinbase(sym)
+            source = "coinbase"
         if price is None:
             raise RuntimeError(f"All price sources failed for {sym}")
 
