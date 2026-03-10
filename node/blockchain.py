@@ -496,11 +496,11 @@ class Blockchain:
                             f"  WARNING: Insufficient balance for fee from {fee_payer[:20]}... (skipping transaction)")
                         continue
 
-            self._process_transaction(tx)
+            self._process_transaction(tx, block_timestamp=block.BlockHeader.Timestamp)
 
         # Process coinbase transactions last (after fee collection)
         for tx in coinbase_txs:
-            self._process_transaction(tx)
+            self._process_transaction(tx, block_timestamp=block.BlockHeader.Timestamp)
 
         # Award collected fees to miner
         if miner_address and total_fees_collected > 0:
@@ -514,7 +514,7 @@ class Blockchain:
         print(
             f"Block #{height} added to blockchain (Total fees: {total_fees_collected / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME})")
 
-    def _process_transaction(self, tx: Transaction):
+    def _process_transaction(self, tx: Transaction, block_timestamp: int = 0):
         """
         Process a transaction based on its type
         """
@@ -525,9 +525,9 @@ class Blockchain:
                 self.balances.add_mining_reward(miner_address, reward)
 
         elif isinstance(tx, FuturesTransaction):
-            self._process_futures_transaction(tx)
+            self._process_futures_transaction(tx, block_timestamp=block_timestamp)
 
-    def _process_futures_transaction(self, tx: 'FuturesTransaction'):
+    def _process_futures_transaction(self, tx: 'FuturesTransaction', block_timestamp: int = 0):
         """Process futures-specific transactions"""
         if tx.tx_type == TransactionType.PROPOSE_TRADE:
             # Lock party_a's collateral immediately on proposal
@@ -581,6 +581,13 @@ class Blockchain:
                 return
 
             trade = self.active_trades[tx.trade_id]
+
+            # Enforce expiry: settlement only valid at or after expiry_timestamp
+            if trade.expiry_timestamp and block_timestamp < trade.expiry_timestamp:
+                print(f"Trade {tx.trade_id} settlement rejected: expiry not reached "
+                      f"(block_ts={block_timestamp}, expiry={trade.expiry_timestamp})")
+                return
+
             loser = trade.party_a if tx.winner == trade.party_b else trade.party_b
 
             self.balances.settle_trade(
@@ -619,8 +626,12 @@ class Blockchain:
         )
 
     def get_proposed_trades(self) -> List['FuturesTransaction']:
-        """Get all open (not yet accepted) trade proposals"""
-        return list(self.proposed_trades.values())
+        """Get open (not yet accepted) trade proposals that have not yet expired."""
+        now = int(time.time())
+        return [
+            t for t in self.proposed_trades.values()
+            if t.expiry_timestamp is None or now <= t.expiry_timestamp
+        ]
 
     def _expire_stale_proposals(self, current_time: int):
         """

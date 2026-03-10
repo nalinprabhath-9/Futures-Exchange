@@ -1,44 +1,135 @@
 # Futures-Exchange
 
-Execution Steps:
+A blockchain-based futures trading system with 3 nodes, a price oracle, and a CLI wallet.
 
-## Step 1: Run Full Automated Setup
+---
 
-This will:
-- Reset databases
-- Seed users + generate keystore
-- Start 3 blockchain nodes
-- Import users
-- Deposit + lock collateral
-- Create proposal
-- Accept proposal
-- Mine agreement into a block
+## Setup
+
+Install Python dependencies:
 
 ```bash
-chmod +x run_all.sh
-./run_all.sh
+pip install -r requirements.txt
 ```
-after the above execution, you can Launch the Web UI:
-In a new terminal : python ui_server.py --port 8000
-and open http://127.0.0.1:8000 in browser
 
+---
 
+## Starting the System
 
-# 1. Start oracle
-MOCK_MODE=true docker compose up oracle --build -d
+```bash
+# 1. Bring up oracle + 3 blockchain nodes (all in one)
+docker compose -f docker-compose.generated.yml up --build -d
 
-# 2. Start nodes
+# 2. Create 5 users and write keys to users.json
+python scripts/bootstrap_users.py
+
+# 3. Fund each user with starting balance on all nodes
+python scripts/bootstrap_faucet.py
+```
+
+To stop everything:
+
+```bash
+docker compose -f docker-compose.generated.yml down
+```
+
+---
+
+## CLI Usage
+
+```text
+python wallet.py <command>
+```
+
+| Command | Description |
+| --- | --- |
+| `health` | Health check all 3 nodes |
+| `balance <user>` | Show total / locked / available balance |
+| `propose <user>` | Propose a new trade (interactive options) |
+| `accept <user>` | Show open proposals and pick one to accept |
+| `mempool` | Show pending transactions across all nodes |
+| `mine` | Mine a block on node1 and sync to node2/node3 |
+| `oracle <asset>` | Fetch live signed price from the oracle |
+| `settle <user>` | Show active expired trades and pick one to settle |
+| `flush` | Clear mempool on all nodes |
+| `sync` | Force node2/node3 to sync from node1 |
+
+User aliases: `alice` = user1, `bob` = user2, `carol` = user3
+
+Propose options:
+
+```bash
+python wallet.py propose alice --asset ETH/USD --strike 3000 --collateral 50000 --expiry 5
+```
+
+`--collateral` is in milli-coins (1000 = 1 FutureCoin). `--expiry` is in minutes.
+
+---
+
+## End-to-End Trade
+
+```bash
+# Check everyone is up
+python wallet.py network
+
+# Check balances
+python wallet.py balance alice
+python wallet.py balance bob
+
+# Alice proposes a trade
+python wallet.py propose alice --asset BTC/USD --strike 85000 --collateral 50000 --expiry 5
+
+# Bob picks from the open proposal list and accepts
+python wallet.py accept bob
+
+# Mine to lock in both proposal and acceptance
+python wallet.py mine
+
+# Confirm trade is now ACTIVE on all nodes
+python wallet.py status
+
+# Wait for expiry (5 minutes), then settle
+# Carol (or any user) submits settlement using the oracle price
+python wallet.py settle carol
+
+# Mine to finalise the payout
+python wallet.py mine
+
+# Check updated balances — winner receives 2x collateral
+python wallet.py balance alice
+python wallet.py balance bob
+```
+
+---
+
+## Running Tests
+
+### Automated E2E (starts nodes, bootstraps, runs all tests, tears down)
+
+```bash
+chmod +x scripts/run_e2e.sh
+./scripts/run_e2e.sh
+```
+
+This script:
+
+1. Calls `./scripts/up.sh 3` to generate the compose file and start 3 nodes
+2. Bootstraps users and funds them via faucet
+3. Runs `tests/test_all.py` (propose → accept → mine → settle, plus edge cases)
+
+### Manual steps (nodes already running)
+
+```bash
+# Start nodes
 ./scripts/up.sh 3
 
-# 3. Create users + fund
+# Bootstrap users and fund
 python scripts/bootstrap_users.py
 python scripts/bootstrap_faucet.py
 
-# 4. Verify oracle
-curl -s localhost:8080/price/BTC | python3 -m json.tool
-
-# 5. Run oracle integration
-python test_oracle_integration.py
-
-# 6. Run futures E2E
+# Run the full test suite
 python tests/test_all.py
+
+# Stop nodes
+./scripts/down.sh
+```
