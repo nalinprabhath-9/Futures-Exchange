@@ -19,4 +19,4 @@ python scripts/bootstrap_faucet.py
 # run tests
 python tests/test_all.py
 
-echo "✅ e2e finished"
+echo "Success: e2e finished"

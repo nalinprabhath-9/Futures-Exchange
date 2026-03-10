@@ -1,4 +1,4 @@
-version: "3.9"
+version: '3.9'
 
 services:
   oracle:
@@ -9,17 +9,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Set MOCK_MODE=true for local testing without real API calls
       MOCK_MODE: "false"
-      # MOCK_SEED: "42"          # Uncomment for deterministic mock prices
-      CACHE_MAX_AGE: "30"       # Seconds before a cached price is re-fetched
+      CACHE_MAX_AGE: "30"
       PORT: "8080"
       DB_PATH: "/data/oracle.db"
       KEY_PATH: "/data/oracle_privkey.hex"
     volumes:
-      # Persist the private key and price database across container restarts.
-      # IMPORTANT: back up oracle_privkey.hex — losing it means nodes can no
-      # longer verify signatures from this oracle instance.
       - oracle_data:/data
     restart: unless-stopped
     healthcheck:
@@ -29,7 +24,82 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - exchange
+
+  node1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: node1
+    ports:
+      - "5001:5001"
+    environment:
+      - NODE_ID=node1
+      - PORT=5001
+      - DB_PATH=/data/chain.db
+      - PEERS=http://node2:5002,http://node3:5003
+      - MINER_ADDRESS=miner_node1
+      - PROPOSAL_TIMEOUT=3600
+      - ORACLE_URL=http://oracle:8080
+    volumes:
+      - ./volumes/node1:/data
+    depends_on:
+      oracle:
+        condition: service_healthy
+    networks:
+      - exchange
+
+  node2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: node2
+    ports:
+      - "5002:5002"
+    environment:
+      - NODE_ID=node2
+      - PORT=5002
+      - DB_PATH=/data/chain.db
+      - PEERS=http://node1:5001,http://node3:5003
+      - MINER_ADDRESS=miner_node2
+      - PROPOSAL_TIMEOUT=3600
+      - ORACLE_URL=http://oracle:8080
+    volumes:
+      - ./volumes/node2:/data
+    depends_on:
+      oracle:
+        condition: service_healthy
+    networks:
+      - exchange
+
+  node3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: node3
+    ports:
+      - "5003:5003"
+    environment:
+      - NODE_ID=node3
+      - PORT=5003
+      - DB_PATH=/data/chain.db
+      - PEERS=http://node1:5001,http://node2:5002
+      - MINER_ADDRESS=miner_node3
+      - PROPOSAL_TIMEOUT=3600
+      - ORACLE_URL=http://oracle:8080
+    volumes:
+      - ./volumes/node3:/data
+    depends_on:
+      oracle:
+        condition: service_healthy
+    networks:
+      - exchange
 
 volumes:
   oracle_data:
     driver: local
+
+networks:
+  exchange:
+    driver: bridge

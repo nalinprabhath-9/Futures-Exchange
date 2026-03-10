@@ -2,31 +2,7 @@
 """
 Futures-Exchange wallet CLI
 ============================
-Simple command-line interface for the demo.
-
-Usage
------
-  python wallet.py network               # health check all 3 nodes
-  python wallet.py balance <user>        # show a user's balance
-  python wallet.py propose <user> [--asset BTC/USD] [--strike 45000] [--collateral 50000] [--expiry 5]
-  python wallet.py accept  <user>        # accept the last proposed trade
-  python wallet.py mempool               # show pending transactions
-  python wallet.py mine                  # mine a block on node1
-  python wallet.py oracle  <asset>       # fetch & display signed oracle price
-  python wallet.py settle  <user>        # settle the last trade with oracle price
-  python wallet.py status                # show trade state across all 3 nodes
-
-The last trade ID is remembered in .last_trade so you never need to copy-paste it.
-Override with --trade-id <id> if needed.
-
-Defaults (override with env vars):
-  NODES=http://localhost:5001,http://localhost:5002,http://localhost:5003
-  ORACLE=http://localhost:8080
-  USERS_FILE=users.json
-  ASSET=BTC/USD
-  STRIKE=45000
-  COLLATERAL=50000     (milli-coins = 50 FutureCoins)
-  EXPIRY_MINS=5
+Simple command-line interface
 """
 
 import argparse
@@ -36,6 +12,12 @@ import sys
 import time
 
 import requests
+
+USE_COLOR = sys.stdout.isatty()
+
+GREEN = "\033[92m" if USE_COLOR else ""
+RED = "\033[91m" if USE_COLOR else ""
+RESET = "\033[0m" if USE_COLOR else ""
 
 # ── path so node.* imports work from project root ────────────────────────────
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -86,34 +68,15 @@ def _header(title):
 
 
 def _ok(msg):
-    print(f"  ✓  {msg}")
-
-
-def _info(msg):
-    print(f"     {msg}")
+    print(f"{GREEN}  {msg}{RESET}")
 
 
 def _err(msg):
-    print(f"  ✗  {msg}", file=sys.stderr)
-    sys.exit(1)
+    print(f"{RED}  {msg}{RESET}", file=sys.stderr)
 
 
 def _coins(milli):
     return f"{milli / MILLI_DENOMINATION:.1f} {CRYPTOCURRENCY_NAME}"
-
-
-# ── Persistence helpers ───────────────────────────────────────────────────────
-def _save_trade_id(trade_id):
-    with open(LAST_TRADE_FILE, "w") as f:
-        f.write(trade_id)
-
-
-def _load_trade_id(override=None):
-    if override:
-        return override
-    if os.path.exists(LAST_TRADE_FILE):
-        return open(LAST_TRADE_FILE).read().strip()
-    _err("No trade ID found. Run 'propose' first, or pass --trade-id.")
 
 
 # ── User helpers ──────────────────────────────────────────────────────────────
@@ -136,9 +99,7 @@ def _get_user(name):
     }
     key = aliases.get(name.lower(), key)
     if key not in users:
-        _err(
-            f"Unknown user '{name}'. Available: alice/user1, bob/user2, carol/user3, ..."
-        )
+        _err(f"Unknown user '{name}'. Available: {list(aliases.keys())}")
     return users[key]
 
 
@@ -186,7 +147,7 @@ def _get_health(node_url):
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 
-def cmd_network(args):
+def cmd_health(args):
     _header("NETWORK STATUS")
     for label, url in [("node1", N1), ("node2", N2), ("node3", N3)]:
         try:
@@ -196,23 +157,26 @@ def cmd_network(args):
                 f"{label:<8}  height={h['tip_height']}  mempool={h['mempool']}  peers={peers}  {url}"
             )
         except Exception:
-            print(f"  ✗  {label:<8}  UNREACHABLE  {url}")
+            _err(f"{label:<8}  UNREACHABLE  {url}")
 
 
 def cmd_balance(args):
     user = _get_user(args.user)
     addr = user["address"]
     _header(f"BALANCE — {args.user.upper()}")
-    _info(f"Address : {addr}")
+    print(f"Address : {addr}")
     _sep()
     for label, url in [("node1", N1), ("node2", N2), ("node3", N3)]:
         try:
             b = _get_balance(url, addr)
+            if not b.get("ok"):
+                print(f"{label}  unexpected response: {b}")
+                continue
             _ok(
                 f"{label}  total={_coins(b['balance'])}  locked={_coins(b['locked'])}  available={_coins(b['available'])}"
             )
         except Exception:
-            print(f"  ✗  {label}  UNREACHABLE")
+            _err(f"{label}  UNREACHABLE")
 
 
 def cmd_propose(args):
@@ -224,12 +188,12 @@ def cmd_propose(args):
     expiry = args.expiry or EXPIRY_MINS
 
     _header(f"PROPOSE TRADE — {args.user.upper()} → node1")
-    _info(f"Asset    : {asset}")
-    _info(f"Template : UP/DOWN  (binary: price above or below strike at expiry)")
-    _info(f"Strike   : ${strike:,.0f}")
-    _info(f"Collat   : {_coins(collat)} (will lock from {args.user} on mine)")
-    _info(f"Expiry   : {expiry} minutes from now")
-    _info(f"Trade ID : {trade_id}")
+    print(f"Asset    : {asset}")
+    print(f"Template : UP/DOWN  (binary: price above or below strike at expiry)")
+    print(f"Strike   : ${strike:,.0f}")
+    print(f"Collat   : {_coins(collat)} (will lock from {args.user} on mine)")
+    print(f"Expiry   : {expiry} minutes from now")
+    print(f"Trade ID : {trade_id}")
     _sep()
 
     expiry_ts = int(time.time()) + expiry * 60
@@ -250,7 +214,6 @@ def cmd_propose(args):
     tx.pubkey = get_compressed_pubkey(sk.verifying_key)
 
     r = _submit(N1, tx)
-    _save_trade_id(trade_id)
 
     _ok(f"Accepted by node1  tx={r['tx_hash'][:20]}...")
     _ok(f"Trade ID saved → run 'accept', 'status', 'settle' without any extra args")
@@ -278,13 +241,15 @@ def cmd_accept(args):
 
         _header("OPEN PROPOSALS")
         for i, p in enumerate(proposals):
-            expiry_str = time.strftime("%H:%M:%S", time.localtime(p.get("expiry_timestamp", 0)))
+            expiry_str = time.strftime(
+                "%H:%M:%S", time.localtime(p.get("expiry_timestamp", 0))
+            )
             collat_str = _coins(p.get("collateral_amount", 0))
             party_a_short = (p.get("party_a") or "")[:16]
             print(
                 f"  [{i + 1}]  {p['trade_id']}"
                 f"\n       Asset  : {p.get('asset_pair')}  Strike : ${p.get('strike_price', 0):,.0f}"
-                f"\n       Collat : {collat_str}  Expiry : {expiry_str}"
+                f"\n       Collateral : {collat_str}  Expiry : {expiry_str}"
                 f"\n       From   : {party_a_short}..."
             )
         _sep()
@@ -292,7 +257,9 @@ def cmd_accept(args):
         # Prompt user to pick
         while True:
             try:
-                choice = input(f"  Enter number to accept [1-{len(proposals)}], or 'q' to quit: ").strip()
+                choice = input(
+                    f"  Enter number to accept [1-{len(proposals)}], or 'q' to quit: "
+                ).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 _err("Aborted.")
@@ -302,13 +269,11 @@ def cmd_accept(args):
                 selected = proposals[int(choice) - 1]
                 trade_id = selected["trade_id"]
                 break
-            print(f"     Invalid choice, enter a number between 1 and {len(proposals)}.")
-
-        _save_trade_id(trade_id)
+            print(f"Invalid choice, enter a number between 1 and {len(proposals)}.")
 
     _header(f"ACCEPT TRADE — {args.user.upper()} → node2")
-    _info(f"Trade ID : {trade_id}")
-    _info(f"Party B  : {user['address']}")
+    print(f"Trade ID : {trade_id}")
+    print(f"Party B  : {user['address']}")
     _sep()
 
     tx = create_accept_trade_transaction(
@@ -318,7 +283,7 @@ def cmd_accept(args):
     )
     r = _submit(N2, tx)
     _ok(f"Accepted by node2  tx={r['tx_hash'][:20]}...")
-    _ok("Trade ID saved — run 'status', 'mine', 'settle' without extra args")
+    _ok("Trade ID saved — run 'mine', 'settle' without extra args")
 
 
 def cmd_mempool(args):
@@ -333,9 +298,9 @@ def cmd_mempool(args):
                         f"{label}  {t['tx_type']:<20}  fee={t['fee']}  trade={t.get('trade_id','')}"
                     )
             else:
-                _info(f"{label}  (empty)")
+                print(f"{label}  (empty)")
         except Exception:
-            print(f"  ✗  {label}  UNREACHABLE")
+            _err(f"{label}  UNREACHABLE")
 
 
 def _sync_node(label, node_url, source_url):
@@ -367,7 +332,7 @@ def cmd_mine(args):
             if h != r["mined_height"]:
                 new_h = _sync_node(label, url, N1)
                 if new_h is not None:
-                    _ok(f"{label}  synced → height={new_h}")
+                    _ok(f"{label}  synced, height={new_h}")
         except Exception:
             pass
 
@@ -381,80 +346,25 @@ def cmd_flush(args):
             if r.get("ok"):
                 _ok(f"{label}  mempool cleared")
             else:
-                print(f"  ✗  {label}  {r.get('error', r)}")
+                _err(f"{label}  {r.get('error', r)}")
         except Exception:
-            print(f"  ✗  {label}  UNREACHABLE")
+            _err(f"{label}  UNREACHABLE")
 
 
 def cmd_sync(args):
-    """Sync node2 and node3 from node1."""
-    _header("SYNC — node2 & node3 from node1")
+    """Sync node2 and node3 with node1."""
+    _header("SYNC — node2 & node3 with node1")
     for label, url in [("node2", N2), ("node3", N3)]:
         new_h = _sync_node(label, url, N1)
         if new_h is not None:
-            _ok(f"{label}  synced → height={new_h}")
+            _ok(f"{label}  synced, height={new_h}")
         else:
-            print(f"  ✗  {label}  sync failed or already up to date")
-
-
-def cmd_status(args):
-    trade_id = _load_trade_id(args.trade_id)
-    _header(f"TRADE STATUS — {trade_id}")
-
-    # Check mempool first — trade exists on-chain only after mining
-    pending_types = []
-    try:
-        mp = _get_mempool(N1).get("mempool", [])
-        pending_types = [t["tx_type"] for t in mp if t.get("trade_id") == trade_id]
-    except Exception:
-        pass
-
-    if pending_types:
-        print(f"  ⏳  Pending in mempool (not yet mined): {pending_types}")
-        print(f"       → Run:  python wallet.py mine")
-        return
-
-    found_any = False
-    for label, url in [("node1", N1), ("node2", N2), ("node3", N3)]:
-        try:
-            t = _get_trade(url, trade_id).get("trade", {})
-            if not t:
-                _info(f"{label}  not on chain yet")
-                continue
-            found_any = True
-            state = t.get("state", "?")
-            expiry = time.strftime(
-                "%H:%M:%S", time.localtime(t.get("expiry_timestamp", 0))
-            )
-            party_a = (t.get("party_a") or "")[:12]
-            party_b = (t.get("party_b") or "pending")[:12]
-            winner = t.get("winner")
-            line = f"{label}  state={state}  expiry={expiry}  A={party_a}  B={party_b}"
-            if winner:
-                line += f"  winner={winner[:12]}..."
-            _ok(line)
-        except Exception:
-            print(f"  ✗  {label}  UNREACHABLE")
-
-    if not found_any and not pending_types:
-        _info("Trade not found in mempool or on chain.")
-        _info("Have you run 'propose' yet?")
-        return
-
-    # Print extra settlement info if settled
-    try:
-        t = _get_trade(N1, trade_id).get("trade", {})
-        if t.get("settlement_price"):
-            _sep()
-            _info(f"Settlement price : ${t['settlement_price']:,.2f}")
-            _info(f"Winner payout    : {_coins(t.get('winner_payout') or 0)}")
-    except Exception:
-        pass
+            _err(f"{label}  sync failed or already up to date")
 
 
 def cmd_oracle(args):
     asset = (args.asset or "BTC").upper()
-    symbol = asset.split("/")[0]  # "BTC/USD" → "BTC"
+    symbol = asset.split("/")[0]  # "BTC/USD" -> "BTC"
     _header(f"ORACLE PRICE — {symbol}")
     try:
         r = requests.get(f"{ORACLE_URL}/price/{symbol}", timeout=10).json()
@@ -466,8 +376,6 @@ def cmd_oracle(args):
     _ok(f"Timestamp  : {ts_str}")
     _ok(f"Signature  : {r['signature'][:32]}...")
     _ok(f"Oracle key : {r['oracle_pubkey'][:24]}...")
-    _info("(secp256k1 ECDSA — same curve as Bitcoin)")
-    _info("Nodes verify this signature before accepting any settlement")
 
 
 def cmd_settle(args):
@@ -493,12 +401,14 @@ def cmd_settle(args):
 
         _header("ACTIVE TRADES")
         if not_ready:
-            _info("Not yet expired (cannot settle):")
+            print("Not yet expired (cannot settle):")
             for t in not_ready:
                 remaining = t.get("expiry_timestamp", 0) - now
                 mins, secs = divmod(remaining, 60)
-                expiry_str = time.strftime("%H:%M:%S", time.localtime(t.get("expiry_timestamp", 0)))
-                _info(
+                expiry_str = time.strftime(
+                    "%H:%M:%S", time.localtime(t.get("expiry_timestamp", 0))
+                )
+                print(
                     f"  {t['trade_id']}  {t.get('asset_pair')}  "
                     f"strike=${t.get('strike_price', 0):,.0f}  "
                     f"expires {expiry_str} ({mins}m {secs}s)"
@@ -506,11 +416,15 @@ def cmd_settle(args):
             _sep()
 
         if not ready:
-            _err("No trades have reached expiry yet. Wait for the expiry time shown above.")
+            _err(
+                "No trades have reached expiry yet. Wait for the expiry time shown above."
+            )
 
-        _info("Ready to settle:")
+        print("Ready to settle:")
         for i, t in enumerate(ready):
-            expiry_str = time.strftime("%H:%M:%S", time.localtime(t.get("expiry_timestamp", 0)))
+            expiry_str = time.strftime(
+                "%H:%M:%S", time.localtime(t.get("expiry_timestamp", 0))
+            )
             party_a_short = (t.get("party_a") or "")[:16]
             party_b_short = (t.get("party_b") or "")[:16]
             print(
@@ -523,7 +437,9 @@ def cmd_settle(args):
 
         while True:
             try:
-                choice = input(f"  Enter number to settle [1-{len(ready)}], or 'q' to quit: ").strip()
+                choice = input(
+                    f"  Enter number to settle [1-{len(ready)}], or 'q' to quit: "
+                ).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 _err("Aborted.")
@@ -533,8 +449,6 @@ def cmd_settle(args):
                 trade_id = ready[int(choice) - 1]["trade_id"]
                 break
             print(f"     Invalid choice, enter a number between 1 and {len(ready)}.")
-
-        _save_trade_id(trade_id)
 
     # Fetch the selected trade
     t = _get_trade(N1, trade_id).get("trade")
@@ -584,13 +498,13 @@ def cmd_settle(args):
     loser_payout = 0
 
     _header(f"SETTLE TRADE — {args.user.upper()} → node3")
-    _info(f"Trade ID       : {trade_id}")
-    _info(f"Oracle price   : ${price:,.2f}")
-    _info(f"Strike price   : ${strike:,.0f}")
-    _info(f"Result         : {result}")
+    print(f"Trade ID       : {trade_id}")
+    print(f"Oracle price   : ${price:,.2f}")
+    print(f"Strike price   : ${strike:,.0f}")
+    print(f"Result         : {result}")
     _sep()
-    _info(f"Winner  : {winner_label}  → receives {_coins(winner_payout)}")
-    _info(f"Loser   : {loser_label}   → receives {_coins(loser_payout)}")
+    print(f"Winner  : {winner_label}  → receives {_coins(winner_payout)}")
+    print(f"Loser   : {loser_label}   → receives {_coins(loser_payout)}")
     _sep()
 
     tx = create_settle_trade_transaction(
@@ -614,30 +528,11 @@ def build_parser():
         prog="wallet.py",
         description="Futures-Exchange demo wallet CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples (full demo flow):
-  python wallet.py network
-  python wallet.py balance alice
-  python wallet.py balance bob
-  python wallet.py propose alice
-  python wallet.py accept  bob
-  python wallet.py mempool
-  python wallet.py mine
-  python wallet.py status
-  python wallet.py balance alice
-  python wallet.py balance bob
-  python wallet.py oracle  BTC
-  python wallet.py settle  alice
-  python wallet.py mine
-  python wallet.py status
-  python wallet.py balance alice
-  python wallet.py balance bob
-""",
     )
     sub = p.add_subparsers(dest="command", metavar="command")
     sub.required = True
 
-    sub.add_parser("network", help="Health check all 3 nodes")
+    sub.add_parser("health", help="Health check all 3 nodes")
 
     sp = sub.add_parser("balance", help="Show a user's balance")
     sp.add_argument("user", help="alice | bob | carol | user1 | user2 ...")
@@ -666,7 +561,9 @@ Examples (full demo flow):
     sp = sub.add_parser("accept", help="Pick and accept an open trade proposal")
     sp.add_argument("user", help="Accepting party, e.g. bob")
     sp.add_argument(
-        "--trade-id", default=None, help="Skip the list and accept a specific trade ID directly"
+        "--trade-id",
+        default=None,
+        help="Skip the list and accept a specific trade ID directly",
     )
 
     sub.add_parser("mempool", help="Show pending transactions on all nodes")
@@ -701,7 +598,7 @@ def main():
     args = parser.parse_args()
 
     dispatch = {
-        "network": cmd_network,
+        "health": cmd_health,
         "balance": cmd_balance,
         "propose": cmd_propose,
         "accept": cmd_accept,
@@ -709,7 +606,6 @@ def main():
         "mine": cmd_mine,
         "flush": cmd_flush,
         "sync": cmd_sync,
-        "status": cmd_status,
         "oracle": cmd_oracle,
         "settle": cmd_settle,
     }
