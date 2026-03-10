@@ -326,6 +326,16 @@ def submit_tx():
                 400,
             )
 
+    elif tx.tx_type == TransactionType.CANCEL_TRADE:
+        # Only PROPOSED trades (not yet accepted) can be cancelled.
+        # If the trade is already ACTIVE, reject immediately.
+        if tx.trade_id in bc.active_trades:
+            return _json_err(
+                f"trade {tx.trade_id} is already ACTIVE and cannot be cancelled — "
+                "only proposed (unaccepted) trades can be cancelled",
+                400,
+            )
+
     # add to mempool engine (fee + min fee enforced here)
     ok = mempool.add_transaction(tx)
     if not ok:
