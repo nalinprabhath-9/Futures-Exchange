@@ -241,9 +241,9 @@ def main():
         r = submit(N1, tx_lowfee)
         print("low fee submit:", r)
         assert_not_ok(r, "low fee submit")
-        print("✅ Rejected by submit/mempool")
+        print("Rejected by submit/mempool")
     except ValueError as e:
-        print("✅ Rejected at construction time:", str(e))
+        print("Rejected at construction time:", str(e))
 
     # --------------------------------------------------------
     # CASE 3: Invalid signature rejection
@@ -350,7 +350,7 @@ def main():
     print("propose insuf:", r)
 
     if not r.get("ok"):
-        print("✅ Proposal rejected as expected because collateral is too high")
+        print("Proposal rejected as expected because collateral is too high")
     else:
         tx_insuf_acc = create_accept_trade_transaction(
             trade_id=trade_insuf,
@@ -361,7 +361,7 @@ def main():
         print("accept insuf:", r2)
 
         if not r2.get("ok"):
-            print("✅ Acceptance rejected due to insufficient collateral")
+            print("Acceptance rejected due to insufficient collateral")
         else:
             r3 = mine(N1)
             print("mine insuf node1:", r3)
@@ -448,7 +448,7 @@ def main():
     r = submit(N1, tx_can_active)
     print("cancel active tx (should be rejected):", r)
     assert_not_ok(r, "cancel of active trade should be rejected")
-    print("✅ Cancel of ACTIVE trade correctly rejected")
+    print("Cancel of ACTIVE trade correctly rejected")
 
     # Confirm trade is still ACTIVE
     t = get_trade(N1, trade_active_cancel)
@@ -513,7 +513,7 @@ def main():
     r = submit(N1, txc7)
     print("cancel proposed tx:", r)
     assert_ok(r, "cancel of proposed trade should be accepted")
-    print("✅ Cancel of PROPOSED trade accepted into mempool")
+    print("Cancel of PROPOSED trade accepted into mempool")
 
     r = mine(N1)
     print("mine cancel:", r)
@@ -527,9 +527,9 @@ def main():
         "CANCELLED",
         "TradeState.CANCELLED",
     ), f"Expected CANCELLED but got: {t.get('trade', {}).get('state')}"
-    print("✅ PROPOSED trade correctly moved to CANCELLED after mining")
+    print("PROPOSED trade correctly moved to CANCELLED after mining")
 
-    print("\nALL DONE ✅")
+    print("\nALL DONE!")
 
 
 if __name__ == "__main__":
