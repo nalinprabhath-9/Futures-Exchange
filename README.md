@@ -70,7 +70,7 @@ python wallet.py propose alice --asset ETH/USD --strike 3000 --collateral 50000 
 
 ```bash
 # Check everyone is up
-python wallet.py network
+python wallet.py health
 
 # Check balances
 python wallet.py balance alice

@@ -216,7 +216,6 @@ def cmd_propose(args):
     r = _submit(N1, tx)
 
     _ok(f"Accepted by node1  tx={r['tx_hash'][:20]}...")
-    _ok(f"Trade ID saved → run 'accept', 'status', 'settle' without any extra args")
 
 
 def cmd_accept(args):
@@ -263,8 +262,10 @@ def cmd_accept(args):
             except (EOFError, KeyboardInterrupt):
                 print()
                 _err("Aborted.")
+                sys.exit(1)
             if choice.lower() == "q":
                 _err("Aborted.")
+                sys.exit(1)
             if choice.isdigit() and 1 <= int(choice) <= len(proposals):
                 selected = proposals[int(choice) - 1]
                 trade_id = selected["trade_id"]
@@ -283,7 +284,6 @@ def cmd_accept(args):
     )
     r = _submit(N2, tx)
     _ok(f"Accepted by node2  tx={r['tx_hash'][:20]}...")
-    _ok("Trade ID saved — run 'mine', 'settle' without extra args")
 
 
 def cmd_mempool(args):
@@ -443,8 +443,10 @@ def cmd_settle(args):
             except (EOFError, KeyboardInterrupt):
                 print()
                 _err("Aborted.")
+                sys.exit(1)
             if choice.lower() == "q":
                 _err("Aborted.")
+                sys.exit(1)
             if choice.isdigit() and 1 <= int(choice) <= len(ready):
                 trade_id = ready[int(choice) - 1]["trade_id"]
                 break
