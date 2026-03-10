@@ -18,7 +18,7 @@ pip install -r requirements.txt
 
 ```bash
 # 1. Bring up oracle + 3 blockchain nodes (all in one)
-docker compose -f docker-compose.generated.yml up --build -d
+docker compose up --build -d
 
 # 2. Create 5 users and write keys to users.json
 python scripts/bootstrap_users.py
@@ -30,7 +30,7 @@ python scripts/bootstrap_faucet.py
 To stop everything:
 
 ```bash
-docker compose -f docker-compose.generated.yml down
+docker compose down
 ```
 
 ---
@@ -117,7 +117,7 @@ This script:
 2. Bootstraps users and funds them via faucet
 3. Runs `tests/test_all.py` (propose → accept → mine → settle, plus edge cases)
 
-### Manual steps (nodes already running)
+### Manual steps
 
 ```bash
 # Start nodes
