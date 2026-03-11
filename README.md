@@ -79,10 +79,13 @@ python wallet.py balance bob
 # Alice proposes a trade
 python wallet.py propose alice --asset BTC/USD --strike 85000 --collateral 50000 --expiry 5
 
+# Mine to lock in proposal
+python wallet.py mine
+
 # Bob picks from the open proposal list and accepts
 python wallet.py accept bob
 
-# Mine to lock in both proposal and acceptance
+# Mine to lock in acceptance
 python wallet.py mine
 
 # Confirm trade is now ACTIVE on all nodes
