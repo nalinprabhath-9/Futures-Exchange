@@ -11,6 +11,9 @@ CRYPTOCURRENCY_NAME = "FutureCoin"
 MILLI_DENOMINATION = 1000
 MAX_TXNS_PER_BLOCK = 10
 COINBASE_REWARD = 50000
+GENESIS_TIMESTAMP = 1704067200
+GENESIS_BITS = 0x207fffff
+GENESIS_NONCE = 0
 
 MINIMUM_FEES = {
     TransactionType.PROPOSE_TRADE: 1000,  # 1 FutureCoin
@@ -419,7 +422,7 @@ class Blockchain:
         party_a's collateral and moving the trade to EXPIRED.
     """
 
-    def __init__(self, proposal_timeout_seconds: int = 3600):
+    def __init__(self, proposal_timeout_seconds: int = 3600, initialize_genesis: bool = True):
         """
         Initialize blockchain with balance management.
 
@@ -427,6 +430,8 @@ class Blockchain:
             proposal_timeout_seconds: How long (in seconds) a PROPOSED trade
                 waits for acceptance before being automatically expired and
                 party_a's collateral returned. Defaults to 3600 (1 hour).
+            initialize_genesis: Whether to create a deterministic genesis
+                block immediately for a fresh chain.
         """
         self.chain = []
         self.block_height_index = {}
@@ -439,8 +444,32 @@ class Blockchain:
         self.proposal_timeout_seconds = proposal_timeout_seconds
         self.balances = BalanceManager()
 
-        print("Blockchain initialized (genesis block will be mined)")
+        if initialize_genesis:
+            self._initialize_genesis_block()
+
+        print("Blockchain initialized")
         print(f"Futures trading enabled! Proposal timeout: {proposal_timeout_seconds}s")
+
+    def _build_genesis_block(self) -> Block:
+        """Create the deterministic genesis block shared by all nodes."""
+        genesis = Block(previous_block_hash="0" * 64)
+        genesis.BlockHeader.Timestamp = GENESIS_TIMESTAMP
+        genesis.BlockHeader.Bits = GENESIS_BITS
+        genesis.BlockHeader.Nonce = GENESIS_NONCE
+        genesis.BlockHeader.hashMerkleRoot = "0" * 64
+        genesis._calculate_block_hash()
+        return genesis
+
+    def _initialize_genesis_block(self) -> None:
+        """Install block 0 on a fresh chain."""
+        if self.chain:
+            return
+
+        genesis = self._build_genesis_block()
+        self.chain.append(genesis)
+        self.block_height_index[0] = genesis
+        self.block_hash_index[genesis.Blockhash] = genesis
+        print(f"Genesis block initialized: {genesis.Blockhash}")
 
     def add_block(self, block: Block):
         """

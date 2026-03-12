@@ -179,6 +179,37 @@ def rebuild_chain_from_db(conn: sqlite3.Connection, bc: Blockchain) -> None:
         # Apply to blockchain state (balances/trades)
         bc.add_block(b)
 
+def load_chain_structure(conn: sqlite3.Connection, bc: Blockchain) -> None:
+    """
+    Restore persisted block headers and transaction indices without replaying
+    state transitions. Runtime balances and trades come from snapshots.
+    """
+    rows = load_blocks(conn)
+    bc.chain.clear()
+    bc.block_height_index.clear()
+    bc.block_hash_index.clear()
+    bc.transaction_index.clear()
+
+    for r in rows:
+        txs = json.loads(r["txs_json"])
+        b = Block(previous_block_hash=r["prev_hash"])
+        b.BlockHeader.Timestamp = r["ts"]
+        b.BlockHeader.Bits = r["bits"]
+        b.BlockHeader.Nonce = r["nonce"]
+        b.BlockHeader.hashMerkleRoot = r["merkle_root"]
+        b.Blockhash = r["block_hash"]
+
+        for td in txs:
+            tx = deserialize_tx(td)
+            b.Transactions[tx.TransactionHash] = tx
+            bc.transaction_index[tx.TransactionHash] = (b, tx)
+
+        b.TransactionCounter = len(b.Transactions)
+        height = len(bc.chain)
+        bc.chain.append(b)
+        bc.block_height_index[height] = b
+        bc.block_hash_index[b.Blockhash] = b
+
 # ---------------- SNAPSHOTS ----------------
 
 def save_snapshot(conn: sqlite3.Connection, key: str, obj: Any) -> None:

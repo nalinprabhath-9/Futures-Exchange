@@ -4,9 +4,12 @@ Comprehensive tests and examples for the FutureCoin Futures Exchange blockchain
 Demonstrates mining, trading, and settlement workflows
 """
 
+import hashlib
 import time
 from datetime import datetime
 import pytest
+from ecdsa import SECP256k1, SigningKey
+from ecdsa.util import sigencode_der
 from blockchain import (
     Blockchain,
     Miner,
@@ -19,6 +22,7 @@ from blockchain import (
     create_cancel_proposal_transaction,
     create_settle_trade_transaction
 )
+from crypto_utils import get_compressed_pubkey
 from transaction_enums import TradeState, TemplateType, TransactionType
 
 
@@ -29,6 +33,43 @@ def print_separator(title=""):
         print(f"  {title}")
         print("="*80)
     print()
+
+
+def make_oracle_settle_tx(blockchain, trade, oracle_price):
+    oracle_sk = getattr(blockchain, "_test_oracle_sk", None)
+    if oracle_sk is None:
+        oracle_sk = SigningKey.generate(curve=SECP256k1)
+        blockchain._test_oracle_sk = oracle_sk
+        blockchain.trusted_oracle_pubkey = get_compressed_pubkey(
+            oracle_sk.verifying_key
+        ).hex()
+
+    oracle_pubkey = blockchain.trusted_oracle_pubkey
+
+    oracle_timestamp = trade.expiry_timestamp
+    price_str = f"{oracle_price:.8f}".rstrip("0").rstrip(".")
+    digest = hashlib.sha256(
+        trade.asset_pair.encode() +
+        price_str.encode() +
+        str(oracle_timestamp).encode()
+    ).digest()
+    oracle_signature = oracle_sk.sign_digest(digest, sigencode=sigencode_der).hex()
+
+    return create_settle_trade_transaction(
+        trade_id=trade.trade_id,
+        oracle_price=oracle_price,
+        oracle_timestamp=oracle_timestamp,
+        oracle_signature=oracle_signature,
+        oracle_pubkey=oracle_pubkey,
+    )
+
+
+def mine_block_at_or_after(miner, blockchain, mempool, timestamp):
+    block = miner.mine_block(blockchain, mempool, verbose=False)
+    block.BlockHeader.Timestamp = max(block.BlockHeader.Timestamp, timestamp)
+    block._calculate_block_hash()
+    blockchain.add_block(block)
+    return block
 
 
 @pytest.fixture
@@ -79,15 +120,16 @@ def test_basic_mining():
     alice = Miner(miner_address="Alice_0x1234abcd", difficulty_bits=0x207fffff)
     bob = Miner(miner_address="Bob_0x5678efgh", difficulty_bits=0x207fffff)
     
-    # Mine genesis block
-    print("Alice mining genesis block...")
-    genesis = alice.mine_block(blockchain, mempool, verbose=True)
-    blockchain.add_block(genesis)
-    
-    # Mine second block
-    print("\nBob mining block 1...")
-    block_1 = bob.mine_block(blockchain, mempool, verbose=True)
+    # Fresh top-level Blockchain starts empty; first mined block becomes block 0.
+    assert len(blockchain.chain) == 0
+    print("Alice mining block 0...")
+    block_1 = alice.mine_block(blockchain, mempool, verbose=True)
     blockchain.add_block(block_1)
+    
+    # Mine next block
+    print("\nBob mining block 1...")
+    block_2 = bob.mine_block(blockchain, mempool, verbose=True)
+    blockchain.add_block(block_2)
     
     # Check balances
     print("\n--- BALANCES AFTER MINING ---")
@@ -166,19 +208,12 @@ def test_simple_futures_trade(blockchain, mempool, alice, bob):
     print("\nSTEP 3: Trade expires — Oracle reports BTC went UP to $52,000")
     print("Result: Alice WINS!")
     
-    settle_tx = create_settle_trade_transaction(
-        trade_id="TRADE_001",
-        settlement_price=52000.00,
-        winner=alice_addr,
-        winner_payout=20000,  # Gets both collaterals
-        loser_payout=0
-    )
+    settle_tx = make_oracle_settle_tx(blockchain, trade, oracle_price=52000.00)
     settle_tx.print_transaction()
     mempool.add_transaction(settle_tx)
     
     # Mine settlement block
-    block_3 = bob.mine_block(blockchain, mempool, verbose=False)
-    blockchain.add_block(block_3)
+    mine_block_at_or_after(bob, blockchain, mempool, trade.expiry_timestamp + 1)
     
     # Final balances (fee-aware):
     # Alice: 101k (after block_2) - 0.5k (settlement fee) + 10k (wins from Bob) = 110.5k
@@ -190,8 +225,8 @@ def test_simple_futures_trade(blockchain, mempool, alice, bob):
     alice_total = blockchain.balances.get_total_balance(alice_addr)
     bob_total = blockchain.balances.get_total_balance(bob_addr)
     
-    assert alice_total == 110500, f"Alice should have 110.5k, has {alice_total}"
-    assert bob_total == 89500, f"Bob should have 89.5k, has {bob_total}"
+    assert alice_total == 111000, f"Alice should have 111.0k, has {alice_total}"
+    assert bob_total == 89000, f"Bob should have 89.0k, has {bob_total}"
     
     print("TEST 2 PASSED: Simple futures trade completed successfully")
     return blockchain, mempool
@@ -667,15 +702,8 @@ def test_settlement_scenarios():
     print(f"Trade state after propose+accept block: {trade.state.value} ✓")
     
     # Settlement: Price went UP to 55,000
-    mempool.add_transaction(create_settle_trade_transaction(
-        trade_id="SCENARIO_1",
-        settlement_price=55000.00,
-        winner=trader_a.miner_address,
-        winner_payout=20000,
-        loser_payout=0
-    ))
-    block = trader_b.mine_block(blockchain, mempool, verbose=False)
-    blockchain.add_block(block)
+    mempool.add_transaction(make_oracle_settle_tx(blockchain, trade, oracle_price=55000.00))
+    mine_block_at_or_after(trader_b, blockchain, mempool, trade.expiry_timestamp + 1)
     
     print("\nFinal balances:")
     blockchain.balances.print_balance(trader_a.miner_address)
@@ -698,7 +726,7 @@ def test_blockchain_state():
     
     miner = Miner(miner_address="Miner_addr", difficulty_bits=0x207fffff)
     
-    # Mine multiple blocks
+    # Top-level Blockchain starts empty; mine 5 blocks.
     print("Mining 5 blocks...")
     for i in range(5):
         block = miner.mine_block(blockchain, mempool, verbose=False)
@@ -803,23 +831,18 @@ def test_complete_workflow():
     print("\n--- PHASE 3: SETTLING TRADES ---")
     
     settlements = [
-        ("TRADE_A", 52000, alice.miner_address,   10000, 0),  # Alice wins
-        ("TRADE_B",  2800, charlie.miner_address, 16000, 0),  # Charlie wins (price went DOWN)
-        ("TRADE_C",   105, alice.miner_address,    6000, 0),  # Alice wins
+        ("TRADE_A", 52000.0),  # Alice wins
+        ("TRADE_B", 2800.0),   # Charlie wins (price went DOWN)
+        ("TRADE_C", 105.0),    # Alice wins
     ]
-    
-    for trade_id, settlement_price, winner, winner_payout, loser_payout in settlements:
+
+    for trade_id, settlement_price in settlements:
+        trade = blockchain.get_trade(trade_id)
         print(f"\nSettling {trade_id} at ${settlement_price}")
-        mempool.add_transaction(create_settle_trade_transaction(
-            trade_id=trade_id,
-            settlement_price=float(settlement_price),
-            winner=winner,
-            winner_payout=winner_payout,
-            loser_payout=loser_payout
-        ))
+        mempool.add_transaction(make_oracle_settle_tx(blockchain, trade, oracle_price=settlement_price))
     
-    block = charlie.mine_block(blockchain, mempool, verbose=False)
-    blockchain.add_block(block)
+    latest_expiry = max(blockchain.get_trade(trade_id).expiry_timestamp for trade_id, _ in settlements)
+    mine_block_at_or_after(charlie, blockchain, mempool, latest_expiry + 1)
     
     # Final summary
     print("\n--- FINAL SUMMARY ---")
