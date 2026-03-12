@@ -54,6 +54,70 @@ LAST_TRADE_FILE = ".last_trade"
 # ── Display helpers ───────────────────────────────────────────────────────────
 W = 60
 
+def _print_blockchain_summary(node_url):
+    """Print a compact view of the full blockchain."""
+    try:
+        resp = requests.get(f"{node_url}/chain", timeout=5).json()
+    except Exception:
+        _err("Could not fetch blockchain from node.")
+        return
+
+    blocks = resp.get("blocks", [])
+    if not blocks:
+        print("Blockchain empty.")
+        return
+
+    print()
+    print("╔════════════════════════════════════════════════════════════╗")
+    print("║                     BLOCKCHAIN SUMMARY                     ║")
+    print("╠════════════════════════════════════════════════════════════╣")
+
+    for blk in blocks:
+
+        ts = time.strftime(
+            "%H:%M:%S",
+            time.localtime(blk.get("ts", 0))
+        )
+
+        txs = (
+            json.loads(blk["txs_json"])
+            if isinstance(blk.get("txs_json"), str)
+            else blk.get("txs", [])
+        )
+
+        print(f"║ Block #{blk['height']:<3}  "
+              f"txs={len(txs):<2}  "
+              f"time={ts}  "
+              f"hash={blk['block_hash'][:18]}...")
+
+        for tx in txs:
+
+            if tx.get("_kind") == "basic":
+                reward = tx["outputs"][0]["value"]
+                miner = tx["outputs"][0]["script"]
+
+                print(f"║    COINBASE → {_coins(reward)} to {miner[:10]}...")
+
+            else:
+                tx_type = tx.get("tx_type")
+                trade = tx.get("trade_id", "")
+
+                if tx_type == "propose_trade":
+                    print(f"║    PROPOSE  trade={trade}")
+
+                elif tx_type == "accept_trade":
+                    print(f"║    ACCEPT   trade={trade}")
+
+                elif tx_type == "settle_trade":
+                    print(f"║    SETTLE   trade={trade}")
+
+                else:
+                    print(f"║    {tx_type.upper()} trade={trade}")
+
+        print("║")
+
+    print("╚════════════════════════════════════════════════════════════╝")
+    print()
 
 def _sep():
     print("─" * W)
@@ -324,6 +388,8 @@ def cmd_mine(args):
         f"Block mined!  height={r['mined_height']}  txs={r['included_txs']}  mempool_after={r['mempool_after']}"
     )
     _ok(f"Hash  : {r['block_hash']}")
+
+    _print_blockchain_summary(node_url)
     # Push the new block to node2 and node3
     time.sleep(0.5)  # brief pause for gossip to propagate
     for label, url in [("node2", N2), ("node3", N3)]:

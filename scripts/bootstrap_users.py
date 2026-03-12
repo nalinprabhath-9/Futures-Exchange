@@ -16,7 +16,7 @@ def make_user(user_id: str):
 
 def main():
     nodes = os.environ.get("NODES", "http://localhost:5001,http://localhost:5002,http://localhost:5003").split(",")
-    k = int(os.environ.get("USERS", "5"))
+    k = int(os.environ.get("USERS", "3"))
     users = [make_user(f"user{i}") for i in range(1, k+1)]
 
     for n in nodes:
