@@ -4,6 +4,7 @@ oracle/oracle.db
 
 # Python
 __pycache__/
+node/__pycache__/
 *.py[cod]
 *.pyo
 .venv/
@@ -12,6 +13,8 @@ venv/
 
 # Docker
 .docker/
+volumes/
+users.json
 
 # macOS
 .DS_Store

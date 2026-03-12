@@ -79,10 +79,13 @@ python wallet.py balance bob
 # Alice proposes a trade
 python wallet.py propose alice --asset BTC/USD --strike 85000 --collateral 50000 --expiry 5
 
+# Mine to lock in proposal
+python wallet.py mine
+
 # Bob picks from the open proposal list and accepts
 python wallet.py accept bob
 
-# Mine to lock in both proposal and acceptance
+# Mine to lock in acceptance
 python wallet.py mine
 
 # Confirm trade is now ACTIVE on all nodes
@@ -113,9 +116,12 @@ chmod +x scripts/run_e2e.sh
 
 This script:
 
-1. Calls `./scripts/up.sh 3` to generate the compose file and start 3 nodes
-2. Bootstraps users and funds them via faucet
-3. Runs `tests/test_all.py` (propose → accept → mine → settle, plus edge cases)
+1. Calls `./scripts/down.sh --clean` first so any running stack and persisted node/oracle state are removed
+2. Starts a fresh stack with `./scripts/up.sh`
+3. Waits for the oracle and all 3 nodes to become healthy
+4. Bootstraps users and funds them via faucet
+5. Runs `tests/test_all.py` (propose → accept → mine → settle, plus edge cases)
+6. Always tears everything back down with `./scripts/down.sh --clean`, even if the test fails
 
 ### Manual steps
 

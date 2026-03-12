@@ -522,6 +522,25 @@ def cmd_settle(args):
     _ok("Mine the next block to finalize the payout")
 
 
+def cmd_status(args):
+    """Show all active trades across all 3 nodes."""
+    _header("ACTIVE TRADES ACROSS ALL NODES")
+    for label, url in [("node1", N1), ("node2", N2), ("node3", N3)]:
+        try:
+            resp = requests.get(f"{url}/trades", timeout=5)
+            if resp.status_code == 200:
+                trades = resp.json().get("active", [])
+                print(f"{label}: {len(trades)} active trade(s)")
+                for t in trades:
+                    expiry_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t.get("expiry_timestamp", 0)))
+                    print(f"  {t['trade_id']}  {t.get('asset_pair')}  strike=${t.get('strike_price', 0):,.0f}  collat={_coins(t.get('collateral_amount', 0))}  expires {expiry_str}  A={t.get('party_a','')[:8]}...  B={t.get('party_b','')[:8]}...")
+            else:
+                print(f"{label}: not found")
+        except Exception as e:
+            print(f"{label}: error ({e})")
+    _sep()
+
+
 # ── Argument parser ───────────────────────────────────────────────────────────
 
 
@@ -610,6 +629,7 @@ def main():
         "sync": cmd_sync,
         "oracle": cmd_oracle,
         "settle": cmd_settle,
+        "status": cmd_status,
     }
     dispatch[args.command](args)
     print()
