@@ -316,18 +316,15 @@ class BalanceManager:
         print(f"Locked {coins} {CRYPTOCURRENCY_NAME} for {party[:20]}... ({role}) in trade {trade_id}")
         return True
 
-    def settle_trade(self, trade_id: str, winner: str, loser: str,
-                     winner_payout: int, loser_payout: int) -> bool:
+    def settle_trade(self, trade_id: str, winner: str, loser: str, winner_payout: int, loser_payout: int) -> bool:
         """
         Settle a trade by unlocking and transferring collateral.
-
         Args:
             trade_id: ID of the trade to settle
             winner: Address of winning party
             loser: Address of losing party
             winner_payout: Amount winner receives (usually 2x collateral)
             loser_payout: Amount loser receives (usually 0)
-
         Returns:
             True if successful
         """
@@ -337,15 +334,25 @@ class BalanceManager:
 
         lock_info = self.trade_locks[trade_id]
         amount = lock_info['amount']
+        party_a = lock_info['party_a']
+        party_b = lock_info['party_b']
 
         # Unlock collateral for both parties
-        self.locked[lock_info['party_a']] -= amount
-        self.locked[lock_info['party_b']] -= amount
+        self.locked[party_a] -= amount
+        self.locked[party_b] -= amount
+        if self.locked[party_a] < 1:  # avoid negative locked
+            self.locked[party_a] = 0
+        if self.locked[party_b] < 1:
+            self.locked[party_b] = 0
 
-        # Transfer from loser to winner
-        loser_loss = amount - loser_payout
-        self.balances[loser] -= loser_loss
-        self.balances[winner] += loser_loss
+        # Remove collateral from both parties
+        self.balances[party_a] -= amount
+        self.balances[party_b] -= amount
+
+        # Credit winner with total payout
+        self.balances[winner] += winner_payout
+        # Credit loser with loser_payout (usually 0, but for completeness)
+        self.balances[loser] += loser_payout
 
         del self.trade_locks[trade_id]
 
