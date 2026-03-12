@@ -514,6 +514,17 @@ class Blockchain:
             self.balances.balances[miner_address] = self.balances.balances.get(miner_address, 0) + total_fees_collected
             print(
                 f"  Miner {miner_address[:20]}... earned {total_fees_collected / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} in fees")
+            # Print miner's new balance for visibility
+            miner_total = self.balances.get_total_balance(miner_address)
+            miner_locked = self.balances.get_locked_balance(miner_address)
+            miner_available = self.balances.get_available_balance(miner_address)
+            print(f"  Miner {miner_address[:20]}... BALANCE: Total={miner_total / MILLI_DENOMINATION:.3f} {CRYPTOCURRENCY_NAME}, Locked={miner_locked / MILLI_DENOMINATION:.3f}, Available={miner_available / MILLI_DENOMINATION:.3f}")
+
+        # Always print miner's balance after mining a block
+        if miner_address:
+            print(f"\n{'=' * 60}")
+            print(f"MINER BALANCE AFTER BLOCK #{height}")
+            self.balances.print_balance(miner_address)
 
         # Expire stale proposals
         self._expire_stale_proposals(block.BlockHeader.Timestamp)

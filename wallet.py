@@ -324,6 +324,17 @@ def cmd_mine(args):
         f"Block mined!  height={r['mined_height']}  txs={r['included_txs']}  mempool_after={r['mempool_after']}"
     )
     _ok(f"Hash  : {r['block_hash']}")
+
+    # --- Show miner address and balance ---
+    # Try to fetch the miner address from node1 health endpoint or env
+    miner_addr = os.environ.get("MINER_ADDRESS", "miner_node1")
+    try:
+        bal = _get_balance(node_url, miner_addr)
+        _ok(f"Miner address: {miner_addr}")
+        _ok(f"Miner balance: total={_coins(bal['balance'])}  locked={_coins(bal['locked'])}  available={_coins(bal['available'])}")
+    except Exception:
+        _err(f"Could not fetch miner balance for {miner_addr}")
+
     # Push the new block to node2 and node3
     time.sleep(0.5)  # brief pause for gossip to propagate
     for label, url in [("node2", N2), ("node3", N3)]:

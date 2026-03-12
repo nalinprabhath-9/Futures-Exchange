@@ -459,7 +459,7 @@ class Blockchain:
             if len(tx.ListOfInputs) > 0 and "Coinbase" in tx.ListOfInputs[0]:
                 if tx.ListOfOutputs and isinstance(tx.ListOfOutputs[0], Output):
                     miner_address = tx.ListOfOutputs[0].Script
-                    break
+                    break  # Only one coinbase per block
 
         # Process all transactions (except coinbase, which is processed last)
         coinbase_txs = []
@@ -475,29 +475,24 @@ class Blockchain:
             if fee > 0:
                 fee_payer = None
                 if isinstance(tx, FuturesTransaction):
-                    if tx.tx_type == TransactionType.PROPOSE_TRADE:
-                        fee_payer = tx.party_a
-                    elif tx.tx_type == TransactionType.ACCEPT_TRADE:
-                        fee_payer = tx.party_b
-                    elif tx.tx_type == TransactionType.CANCEL_PROPOSAL:
-                        fee_payer = tx.party_a
-                        if fee_payer is None and tx.trade_id in self.proposed_trades:
-                            fee_payer = self.proposed_trades[tx.trade_id].party_a
-                    elif tx.tx_type == TransactionType.CANCEL_TRADE:
-                        fee_payer = tx.party_a
-                        if fee_payer is None and tx.trade_id in self.active_trades:
-                            fee_payer = self.active_trades[tx.trade_id].party_a
-                    elif tx.tx_type == TransactionType.SETTLE_TRADE:
-                        fee_payer = tx.party_a or tx.winner
-
+                    # For propose: party_a, for accept: party_b, for settle/cancel: party_a or party_b
+                    if hasattr(tx, 'tx_type'):
+                        if tx.tx_type == TransactionType.PROPOSE_TRADE:
+                            fee_payer = tx.party_a
+                        elif tx.tx_type == TransactionType.ACCEPT_TRADE:
+                            fee_payer = tx.party_b
+                        elif tx.tx_type == TransactionType.SETTLE_TRADE:
+                            # For settle, fee can be paid by either party (use party_a if present, else party_b)
+                            fee_payer = tx.party_a if tx.party_a else tx.party_b
+                        elif tx.tx_type == TransactionType.CANCEL_PROPOSAL:
+                            fee_payer = tx.party_a if hasattr(tx, 'party_a') else None
+                        elif tx.tx_type == TransactionType.CANCEL_TRADE:
+                            fee_payer = tx.party_a if hasattr(tx, 'party_a') else None
+                # For other tx types, extend as needed
                 if fee_payer:
-                    if self.balances.get_available_balance(fee_payer) >= fee:
-                        self.balances.balances[fee_payer] -= fee
-                        total_fees_collected += fee
-                        print(f"  Collected fee: {fee / MILLI_DENOMINATION} {CRYPTOCURRENCY_NAME} from {fee_payer[:20]}...")
-                    else:
-                        print(f"  WARNING: Insufficient balance for fee from {fee_payer[:20]}... (skipping transaction)")
-                        continue
+                    # Deduct fee from payer's balance
+                    self.balances.balances[fee_payer] = self.balances.balances.get(fee_payer, 0) - fee
+                    total_fees_collected += fee
 
             self._process_transaction(tx)
 
@@ -1243,11 +1238,14 @@ def create_accept_trade_transaction(trade_id: str,
                                     party_b: str,
                                     fee: int = None,
                                     high_priority: bool = False,
-                                    privkey_hex: str = None) -> FuturesTransaction:
+                                    privkey_hex: str = None,
+                                    party_a: str = None,
+                                    collateral_amount: int = None) -> FuturesTransaction:
     """
     Create a trade acceptance transaction.
     Party B's collateral will be locked when this tx is processed,
     and the trade transitions directly to ACTIVE.
+    party_a and collateral_amount should be provided to ensure correct fee deduction and trade state handling.
     """
     if fee is None:
         min_fee = MINIMUM_FEES[TransactionType.ACCEPT_TRADE]
@@ -1256,7 +1254,9 @@ def create_accept_trade_transaction(trade_id: str,
     tx = FuturesTransaction(
         trade_id=trade_id,
         tx_type=TransactionType.ACCEPT_TRADE,
+        party_a=party_a,  # ensure party_a is included
         party_b=party_b,
+        collateral_amount=collateral_amount,  # ensure collateral_amount is included
         state=TradeState.ACTIVE,   # skips ACCEPTED; goes straight to ACTIVE
         fee=fee
     )
