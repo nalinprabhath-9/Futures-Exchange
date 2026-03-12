@@ -53,6 +53,7 @@ python wallet.py <command>
 | `settle <user>` | Show active expired trades and pick one to settle |
 | `flush` | Clear mempool on all nodes |
 | `sync` | Force node2/node3 to sync from node1 |
+| `chain` | Display the blockchain (most recent 10 blocks) |
 
 User aliases: `alice` = user1, `bob` = user2, `carol` = user3
 
@@ -97,6 +98,9 @@ python wallet.py settle carol
 
 # Mine to finalise the payout
 python wallet.py mine
+
+# Show the current blockchain blocks with info
+python wallet.py chain
 
 # Check updated balances — winner receives 2x collateral
 python wallet.py balance alice
