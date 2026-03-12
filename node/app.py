@@ -28,20 +28,27 @@ PEERS = [p.strip() for p in os.getenv("PEERS", "").split(",") if p.strip()]
 
 conn = store.connect(DB_PATH)
 store.init_schema(conn)
+rows = store.load_blocks(conn)
 
-bc = Blockchain(proposal_timeout_seconds=int(os.getenv("PROPOSAL_TIMEOUT", "3600")))
+bc = Blockchain(
+    proposal_timeout_seconds=int(os.getenv("PROPOSAL_TIMEOUT", "3600")),
+    initialize_genesis=not rows,
+)
 mempool = TxnMemoryPool()
 miner_address = os.getenv("MINER_ADDRESS", f"miner_{NODE_ID}")
 miner = Miner(miner_address=miner_address)
 
 # Restore chain + snapshots
 try:
-    rows = store.load_blocks(conn)
     if rows:
         # Load block headers/indices for chain height tracking only.
         # Balance/trade state comes from the snapshot (which includes faucet
         # credits that are never recorded in a block).
         store.load_chain_structure(conn, bc)
+    else:
+        # Persist the deterministic genesis block for fresh nodes.
+        store.persist_block(conn, 0, bc.chain[0])
+        store.snapshot_state(conn, bc)
 
     # Always restore balance+trade state from snapshot regardless of blocks.
     store.restore_state(conn, bc)

@@ -3,8 +3,10 @@ Test suite for FutureCoin Futures Exchange blockchain
 Covers mining, trading, settlement, and ECDSA signature verification.
 """
 import os
-import time
+import hashlib
 import pytest
+from ecdsa import SECP256k1, SigningKey
+from ecdsa.util import sigencode_der
 from blockchain import (
     Blockchain,
     Miner,
@@ -13,8 +15,7 @@ from blockchain import (
     MILLI_DENOMINATION,
     create_propose_trade_transaction,
     create_accept_trade_transaction,
-    create_deposit_collateral_transaction,
-    create_settle_trade_transaction
+    create_settle_trade_transaction,
 )
 from transaction_enums import TradeState, TemplateType
 from crypto_utils import get_signing_key_from_hex, get_compressed_pubkey
@@ -28,15 +29,38 @@ ALICE_ADDR = get_compressed_pubkey(get_signing_key_from_hex(ALICE_PRIV).verifyin
 BOB_ADDR = get_compressed_pubkey(get_signing_key_from_hex(BOB_PRIV).verifying_key).hex()
 
 
+def make_oracle_settle_tx(blockchain, trade, oracle_price):
+    oracle_sk = SigningKey.generate(curve=SECP256k1)
+    oracle_pubkey = get_compressed_pubkey(oracle_sk.verifying_key).hex()
+    blockchain.trusted_oracle_pubkey = oracle_pubkey
+
+    oracle_timestamp = trade.expiry_timestamp
+    price_str = f"{oracle_price:.8f}".rstrip("0").rstrip(".")
+    digest = hashlib.sha256(
+        trade.asset_pair.encode() +
+        price_str.encode() +
+        str(oracle_timestamp).encode()
+    ).digest()
+    oracle_signature = oracle_sk.sign_digest(digest, sigencode=sigencode_der).hex()
+
+    return create_settle_trade_transaction(
+        trade_id=trade.trade_id,
+        oracle_price=oracle_price,
+        oracle_timestamp=oracle_timestamp,
+        oracle_signature=oracle_signature,
+        oracle_pubkey=oracle_pubkey,
+    )
+
+
 def test_basic_mining():
     blockchain = Blockchain()
     mempool = TxnMemoryPool()
     alice = Miner(miner_address=ALICE_ADDR, difficulty_bits=0x207fffff)
     bob = Miner(miner_address=BOB_ADDR, difficulty_bits=0x207fffff)
-    # Genesis block
-    genesis = alice.mine_block(blockchain, mempool, verbose=False)
-    blockchain.add_block(genesis)
-    # Second block
+    assert len(blockchain.chain) == 1
+    # First mined block after genesis
+    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    # Second mined block after genesis
     block_1 = bob.mine_block(blockchain, mempool, verbose=False)
     blockchain.add_block(block_1)
     assert blockchain.balances.get_total_balance(ALICE_ADDR) == 50000
@@ -71,39 +95,33 @@ def test_signed_trade_and_settlement():
     mempool.add_transaction(trade_accept)
     # Mine block with proposal and acceptance
     blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
-    # Both deposit collateral (unsigned for simplicity)
-    mempool.add_transaction(create_deposit_collateral_transaction("TRADE_SIG1"))
-    blockchain.add_block(bob.mine_block(blockchain, mempool, verbose=False))
     # Check locked balances
     assert blockchain.balances.get_locked_balance(ALICE_ADDR) == 10000
     assert blockchain.balances.get_locked_balance(BOB_ADDR) == 10000
-    # Settlement (signed by Alice)
-    settle_tx = create_settle_trade_transaction(
-        trade_id="TRADE_SIG1",
-        settlement_price=52000.0,
-        winner=ALICE_ADDR,
-        winner_payout=20000,
-        loser_payout=0,
-        privkey_hex=ALICE_PRIV
-    )
+
+    trade = blockchain.get_trade("TRADE_SIG1")
+    blockchain.chain[-1].BlockHeader.Timestamp = trade.expiry_timestamp + 1
+
+    # Settlement uses oracle-signed price data.
+    settle_tx = make_oracle_settle_tx(blockchain, trade, oracle_price=52000.0)
     mempool.add_transaction(settle_tx)
-    blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
+    blockchain.add_block(bob.mine_block(blockchain, mempool, verbose=False))
     # Final balances
     alice_total = blockchain.balances.get_total_balance(ALICE_ADDR)
     bob_total = blockchain.balances.get_total_balance(BOB_ADDR)
-    assert alice_total == 160000
-    assert bob_total == 90000
+    assert alice_total == 111000
+    assert bob_total == 89000
     # Check trade state
     trade = blockchain.get_trade("TRADE_SIG1")
     assert trade.state == TradeState.SETTLED
     assert trade.winner == ALICE_ADDR
+    assert blockchain.balances.get_locked_balance(ALICE_ADDR) == 0
+    assert blockchain.balances.get_locked_balance(BOB_ADDR) == 0
     # Signature fields present
     assert trade_proposal.signature is not None
     assert trade_proposal.pubkey is not None
     assert trade_accept.signature is not None
     assert trade_accept.pubkey is not None
-    assert settle_tx.signature is not None
-    assert settle_tx.pubkey is not None
 
 def test_invalid_signature_rejected():
     blockchain = Blockchain()
@@ -151,8 +169,6 @@ def test_insufficient_balance():
     accept = create_accept_trade_transaction("TRADE_EXCESSIVE", BOB_ADDR, privkey_hex=BOB_PRIV)
     mempool.add_transaction(accept)
     blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
-    mempool.add_transaction(create_deposit_collateral_transaction("TRADE_EXCESSIVE"))
-    blockchain.add_block(bob.mine_block(blockchain, mempool, verbose=False))
     trade = blockchain.get_trade("TRADE_EXCESSIVE")
     assert trade.state != TradeState.ACTIVE
 
@@ -162,9 +178,9 @@ def test_blockchain_state_tracking():
     miner = Miner(miner_address=ALICE_ADDR, difficulty_bits=0x207fffff)
     for _ in range(5):
         blockchain.add_block(miner.mine_block(blockchain, mempool, verbose=False))
-    assert len(blockchain.chain) == 5
+    assert len(blockchain.chain) == 6
     assert blockchain.get_block_by_height(0) is not None
-    assert blockchain.get_block_by_height(4) is not None
+    assert blockchain.get_block_by_height(5) is not None
     # Chain integrity
     for i in range(1, len(blockchain.chain)):
         assert blockchain.chain[i].BlockHeader.hashPrevBlock == blockchain.chain[i-1].Blockhash
@@ -205,9 +221,6 @@ def test_multiple_trades():
     a2 = create_accept_trade_transaction("T2", BOB_ADDR, privkey_hex=BOB_PRIV)
     mempool.add_transaction(a2)
     blockchain.add_block(alice.mine_block(blockchain, mempool, verbose=False))
-    mempool.add_transaction(create_deposit_collateral_transaction("T1"))
-    mempool.add_transaction(create_deposit_collateral_transaction("T2"))
-    blockchain.add_block(bob.mine_block(blockchain, mempool, verbose=False))
     # Check locked balances
     assert blockchain.balances.get_locked_balance(ALICE_ADDR) == 13000
     assert blockchain.balances.get_locked_balance(BOB_ADDR) == 13000
