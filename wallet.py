@@ -215,7 +215,7 @@ def cmd_propose(args):
 
     r = _submit(N1, tx)
 
-    _ok(f"Accepted by node1  tx={r['tx_hash'][:20]}...")
+    _ok(f"Proposal created with transaction ID tx={r['tx_hash'][:20]}...")
 
 
 def cmd_accept(args):
@@ -283,7 +283,7 @@ def cmd_accept(args):
         privkey_hex=user["privkey_hex"],
     )
     r = _submit(N2, tx)
-    _ok(f"Accepted by node2  tx={r['tx_hash'][:20]}...")
+    _ok(f"Acceptance transaction created with transaction ID tx={r['tx_hash'][:20]}...")
 
 
 def cmd_mempool(args):
@@ -518,8 +518,70 @@ def cmd_settle(args):
         privkey_hex=user["privkey_hex"],
     )
     r = _submit(N3, tx)
-    _ok(f"Settlement accepted by node3  tx={r['tx_hash'][:20]}...")
+    _ok(f"Settlement transaction created with transaction ID tx={r['tx_hash'][:20]}...")
     _ok("Mine the next block to finalize the payout")
+
+
+def cmd_chain(args):
+    """Display the blockchain blocks with full header and transaction details."""
+    limit = args.limit or 10
+    _header(f"BLOCKCHAIN — last {limit} block(s) from node1")
+    try:
+        resp = requests.get(f"{N1}/chain", params={"limit": limit}, timeout=5).json()
+    except Exception:
+        _err("Could not reach node1.")
+        return
+
+    blocks = resp.get("blocks", [])
+    if not blocks:
+        _err("No blocks found. Mine a block first.")
+        return
+
+    for blk in blocks:
+        txs = (
+            json.loads(blk["txs_json"])
+            if isinstance(blk.get("txs_json"), str)
+            else blk.get("txs", [])
+        )
+        ts_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(blk.get("ts", 0)))
+        print()
+        print(f"  Block #{blk['height']}")
+        _sep()
+        print(f"  Hash        : {blk['block_hash']}")
+        print(f"  Prev Hash   : {blk.get('prev_hash', '—')}")
+        print(f"  Merkle Root : {blk.get('merkle_root', '—')}")
+        print(f"  Timestamp   : {ts_str}")
+        print(f"  Nonce       : {blk.get('nonce', '—')}")
+        bits = blk.get("bits")
+        bits_str = hex(bits) if isinstance(bits, int) else "—"
+        print(f"  Difficulty  : {bits_str}")
+        print(f"  Transactions: {len(txs)}")
+        for tx in txs:
+            kind = tx.get("_kind", "futures")
+            if kind == "basic":
+                # Coinbase / mining reward transaction
+                tx_hash = tx.get("tx_hash", "—")
+                outputs = tx.get("outputs", [])
+                reward = outputs[0]["value"] if outputs else 0
+                miner = outputs[0]["script"] if outputs else "—"
+                inputs = tx.get("inputs", [])
+                coinbase_msg = inputs[0] if inputs else "—"
+                _ok(f"Transaction type: COINBASE    hash: {tx_hash}")
+            else:
+                # FuturesTransaction
+                tx_hash = tx.get("transaction_hash", "—")
+                tx_type = tx.get("tx_type", "—")
+                trade_id = tx.get("trade_id", "")
+                fee = tx.get("fee", 0)
+                party_a = tx.get("party_a") or ""
+                party_b = tx.get("party_b") or ""
+                collat = tx.get("collateral_amount")
+                collat_str = f"  collat={_coins(collat)}" if collat else ""
+                parties = f"  A={party_a}" if party_a else ""
+                if party_b:
+                    parties += f"  B={party_b}"
+                _ok(f"Transaction type: {tx_type.upper()}   hash: {tx_hash}")
+    _sep()
 
 
 def cmd_status(args):
@@ -532,8 +594,13 @@ def cmd_status(args):
                 trades = resp.json().get("active", [])
                 print(f"{label}: {len(trades)} active trade(s)")
                 for t in trades:
-                    expiry_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t.get("expiry_timestamp", 0)))
-                    print(f"  {t['trade_id']}  {t.get('asset_pair')}  strike=${t.get('strike_price', 0):,.0f}  collat={_coins(t.get('collateral_amount', 0))}  expires {expiry_str}  A={t.get('party_a','')[:8]}...  B={t.get('party_b','')[:8]}...")
+                    expiry_str = time.strftime(
+                        "%Y-%m-%d %H:%M:%S",
+                        time.localtime(t.get("expiry_timestamp", 0)),
+                    )
+                    print(
+                        f"  {t['trade_id']}  {t.get('asset_pair')}  strike=${t.get('strike_price', 0):,.0f}  collat={_coins(t.get('collateral_amount', 0))}  expires {expiry_str}  A={t.get('party_a','')[:8]}...  B={t.get('party_b','')[:8]}..."
+                    )
             else:
                 print(f"{label}: not found")
         except Exception as e:
@@ -591,6 +658,16 @@ def build_parser():
 
     sub.add_parser("mine", help="Mine a block on node1")
 
+    sp = sub.add_parser(
+        "chain", help="Show mined blocks with full header and tx details"
+    )
+    sp.add_argument(
+        "--limit",
+        default=10,
+        type=int,
+        help="Max number of recent blocks to show (default: 10)",
+    )
+
     sub.add_parser("flush", help="Clear stale mempool on all nodes (run before demo)")
 
     sub.add_parser("sync", help="Sync node2 & node3 from node1 (catch up after mining)")
@@ -630,6 +707,7 @@ def main():
         "oracle": cmd_oracle,
         "settle": cmd_settle,
         "status": cmd_status,
+        "chain": cmd_chain,
     }
     dispatch[args.command](args)
     print()
